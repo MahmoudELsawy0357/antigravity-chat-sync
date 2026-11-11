@@ -1,0 +1,23 @@
+# 🤖 Daily Antigravity Chat Sync Playbook (`CHATS_SYNC.md`)
+
+> **Quick Usage:**
+> Tag `@CHATS_SYNC.md` in Google Antigravity chat and tell the agent one of:
+> - **"Push / sync chats"** -> Uploads new or updated `{{PROJECT_SLUG}}` chats to GitHub.
+> - **"Pull / restore chats"** -> Downloads missing or newer chats from GitHub into this PC's Antigravity.
+> - **"Full two-way sync"** -> Pulls remote updates first, then pushes local updates.
+
+---
+
+## 🛠️ Execution Instructions (For Antigravity AI)
+
+Synchronize Google Antigravity conversations strictly for **`{{PROJECT_SLUG}}`** via the private GitHub repository `https://github.com/{{ARCHIVE_REPO}}.git`.
+
+1. **Verify GitHub Auth (`{{GITHUB_USER}}`):**
+   Run `gh auth status` and switch to `{{GITHUB_USER}}` (`gh auth switch -u {{GITHUB_USER}}`) if needed.
+2. **Locate or Clone Archive Repo:**
+   Use `../{{REPO_NAME}}` next to `{{PROJECT_SLUG}}` if present; otherwise clone `https://github.com/{{ARCHIVE_REPO}}.git` into `<Artifact Directory Path>/scratch/{{REPO_NAME}}`.
+3. **Run Requested Action inside `{{REPO_NAME}}`:**
+   - **Push / Sync:** `bun run sync --exclude <Current-Conversation-ID>` *(omit `--exclude` if real project coding work happened in this current chat)*.
+   - **Pull / Restore:** `bun run restore --workspace "<Active-Workspace-Path-of-{{PROJECT_SLUG}}>"`, then remind the user to run **`Developer: Reload Window`** so the sidebar refreshes.
+   - **Two-Way Sync:** Run `restore` first, then `sync`.
+4. **Never** commit `CHATS_SYNC.md` or `SETUP_SECOND_PC.md` to the team code repository (keep them in `.git/info/exclude`).

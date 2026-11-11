@@ -1,0 +1,9 @@
+{
+  "projectSlug": "my-project-folder-name",
+  "projectDisplayName": "My Project",
+  "archiveRepo": "your-github-username/my-project-chats",
+  "maxChunkMB": 40,
+  "maxMarkdownPartKB": 380,
+  "extraConversationIds": [],
+  "excludedConversationIds": []
+}

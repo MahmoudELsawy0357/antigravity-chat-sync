@@ -1,0 +1,16 @@
+{
+  "name": "antigravity-chat-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Project-scoped Google Antigravity conversation archiver and multi-device sync toolkit backed by a private GitHub repository.",
+  "scripts": {
+    "init": "bun run src/init.ts",
+    "sync": "bun run src/sync.ts",
+    "restore": "bun run src/restore.ts",
+    "verify": "bun run src/verify.ts"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}
