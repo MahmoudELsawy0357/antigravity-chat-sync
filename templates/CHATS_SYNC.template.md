@@ -18,6 +18,7 @@ Synchronize Google Antigravity conversations strictly for **`{{PROJECT_SLUG}}`**
    Use `../{{REPO_NAME}}` next to `{{PROJECT_SLUG}}` if present; otherwise clone `https://github.com/{{ARCHIVE_REPO}}.git` into `<Artifact Directory Path>/scratch/{{REPO_NAME}}`.
 3. **Run Requested Action inside `{{REPO_NAME}}`:**
    - **Push / Sync:** `bun run sync --exclude <Current-Conversation-ID>` *(omit `--exclude` if real project coding work happened in this current chat)*.
-   - **Pull / Restore:** `bun run restore --workspace "<Active-Workspace-Path-of-{{PROJECT_SLUG}}>"`, then remind the user to run **`Developer: Reload Window`** so the sidebar refreshes.
-   - **Two-Way Sync:** Run `restore` first, then `sync`.
+   - **Pull / Restore:** `bun run restore --workspace "<Active-Workspace-Path-of-{{PROJECT_SLUG}}>"`.
+     - **Important (Antigravity 2.x):** While Antigravity is open, `language_server` holds its summary index (`agyhub_summaries_proto.pb`) in RAM and may overwrite index updates on turn end/exit. After `restore` downloads `.db` and `brain/` files, remind the user to **fully quit Antigravity (`File -> Exit`)**, run `cd "<CHATS_REPO_PATH>" && bun run restore` once from an external terminal (takes ~1 second), and reopen Antigravity.
+   - **Two-Way Sync:** Run `restore` first, then `sync` (and remind the user to do the quick close -> `bun run restore` -> reopen step if remote conversations were imported).
 4. **Never** commit `CHATS_SYNC.md` or `SETUP_SECOND_PC.md` to the team code repository (keep them in `.git/info/exclude`).

@@ -1,6 +1,7 @@
 {
   "projectSlug": "my-project-folder-name",
   "projectDisplayName": "My Project",
+  "legacyProjectSlugs": [],
   "archiveRepo": "your-github-username/my-project-chats",
   "maxChunkMB": 40,
   "maxMarkdownPartKB": 380,

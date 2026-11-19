@@ -4,17 +4,23 @@ Understanding how **Google Antigravity** stores conversations locally explains w
 
 ---
 
-## 1. Local Storage Layout (`~/.gemini/antigravity`)
+## 1. Local Storage Layout (`~/.gemini/antigravity` & `~/.gemini/config/projects`)
 
-Antigravity splits conversation state across three locations inside `%USERPROFILE%\.gemini\antigravity` (Windows) or `~/.gemini/antigravity` (macOS/Linux):
+Antigravity 2.x splits conversation & project state across **five** locations:
 
-1. **`conversation_summaries.db` (SQLite Index + FTS5 Search):**
-   - `conversation_summaries` table: Powers the sidebar list. Stores `conversation_id`, `title`, `preview`, `step_count`, `last_modified_time`, `workspace_uris` (JSON array of URL-encoded `file://` paths), `parent_conversation_id` (links subagents to parent chats), and `raw_summary` (Protobuf summary blob).
+1. **`~/.gemini/config/projects/<project-id>.json` (Machine-Local Project Registry):**
+   - Each machine assigns its own local UUID (`project_id`) to every workspace folder (`projectResources.resources[].gitFolder.folderUri`).
+   - Restored conversations carrying another machine's `project_id` cannot be opened cleanly or used to start new chats under the local project unless their `project_id` is remapped to this machine's local UUID.
+2. **`agyhub_summaries_proto.pb` (Primary Antigravity 2.x Sidebar Index):**
+   - Protobuf `map<string, TrajectorySummary>` (`field 1` repeated entries of `{ f1: conversation_id, f2: raw_summary }`) loaded into RAM by `language_server` on startup and flushed on conversation updates.
+   - `src/protobuf.ts` parses and re-encodes this file losslessly without touching unrelated projects.
+3. **`conversation_summaries.db` (SQLite Index + FTS5 Search):**
+   - `conversation_summaries` table: Stores `conversation_id`, `title`, `preview`, `step_count`, `last_modified_time`, `workspace_uris` (JSON array of URL-encoded `file://` paths), `project_id`, `parent_conversation_id`, and `raw_summary` (Protobuf summary blob).
    - `conversations_fts` (FTS5 virtual table backed by `conversations_fts_content`): Powers full-text search across conversations AND stores UTF-8 `user_body` (`c13`), `agent_body` (`c14`), and exact step byte-offset JSON arrays `user_step_byte_offsets` (`c8`) and `agent_step_byte_offsets` (`c9`).
-2. **`conversations/<conversation-id>.db` (Per-Conversation SQLite Trajectory):**
-   - Contains `steps` (`idx`, `step_type`, `step_payload` Protobuf binary blob, `metadata`, `task_details`, `render_info`), `gen_metadata`, `executor_metadata`, and `trajectory_meta`.
-   - Loaded when you click a conversation in the Antigravity UI.
-3. **`brain/<conversation-id>/` (Artifacts, Uploads & JSONL Logs):**
+4. **`conversations/<conversation-id>.db` (Per-Conversation SQLite Trajectory):**
+   - Contains `steps` (`idx`, `step_type`, `step_payload` Protobuf binary blob, `metadata`, `task_details`, `render_info`), `gen_metadata`, `executor_metadata`, `trajectory_meta`, and **`trajectory_metadata_blob`** (`id = 'main'`, Protobuf `TrajectoryMetadata` storing `f1` `WorkspaceInfo`, `f7` encoded URIs, and `f18` `project_id`).
+   - Loaded when you click a conversation in the Antigravity UI; if `trajectory_metadata_blob` still holds a foreign path or `project_id`, opening the chat reverts the summary back to the foreign project.
+5. **`brain/<conversation-id>/` (Artifacts, Uploads & JSONL Logs):**
    - Top-level `.md` artifacts (`implementation_plan.md`, `walkthrough.md`, etc.) + `.metadata.json`.
    - `.user_uploaded/`: Images and files attached by the user.
    - `.system_generated/logs/transcript.jsonl` & `transcript_full.jsonl`: Structured step-by-step JSONL logs read by agents when referencing earlier conversations.
@@ -43,8 +49,13 @@ It filters top-level conversations whose `workspace_uris` contains `projectSlug`
 
 ---
 
-## 4. Cross-Drive Workspace Path Remapping
+## 4. Cross-Drive Workspace & Antigravity 2.x Project ID Remapping
 
-If Machine A stores the project at `D:\all-projects\my-app` (`file:///d%3A/all-projects/my-app`) and Machine B stores it at `C:\dev\my-app`, restoring raw `workspace_uris` unmodified would prevent Antigravity on Machine B from associating those conversations with `C:\dev\my-app`.
+If Machine A stores the project at `D:\all-projects\my-app` (`file:///d%3A/all-projects/my-app`, `project_id = AAAA...`) and Machine B stores it at `C:\dev\my-app` (`file:///c%3A/dev/my-app`, `project_id = BBBB...`), restoring raw files unmodified causes workspace incompatibility errors and prevents creating new chats under the project.
 
-During `bun run restore --workspace <path>` (or via automatic `../<projectSlug>` sibling detection), `adaptWorkspaceUris()` rewrites matching entries in `workspace_uris` to Machine B's exact URL-encoded `file://` URI.
+During `bun run restore --workspace <path>` (or via automatic `../<projectSlug>` sibling detection), `src/restore.ts` + `src/protobuf.ts`:
+1. Auto-detects Machine B's local `project_id` from `~/.gemini/config/projects/*.json`.
+2. Rewrites `workspace_uris`, `raw_summary` (`f9` WorkspaceInfo, `f17.f1` WorkspaceInfo, `f17.f7` encoded URIs, `f17.f18` `project_id`), and every restored conversation DB's `trajectory_metadata_blob` losslessly with valid Protobuf varint length prefixes.
+3. Drops secondary foreign workspace URIs whose paths do not exist on Machine B (e.g., a co-opened backend repo not cloned on Machine B).
+4. Atomically merges updates into `agyhub_summaries_proto.pb` and `conversation_summaries.db` (plus in-place rebinding of any newer local chats without downgrading their step count).
+5. Warns if `language_server` is still running — since Antigravity 2.x caches `agyhub_summaries_proto.pb` in RAM, running `bun run restore` after fully exiting Antigravity guarantees clean persistence.

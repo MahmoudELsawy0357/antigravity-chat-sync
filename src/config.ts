@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 export interface SyncConfig {
   projectSlug: string
   projectDisplayName: string
+  legacyProjectSlugs: string[]
   archiveRepo?: string
   maxChunkMB: number
   maxMarkdownPartKB: number
@@ -56,6 +57,7 @@ export function loadConfig(): SyncConfig {
   return {
     projectSlug,
     projectDisplayName: fileCfg.projectDisplayName || projectSlug,
+    legacyProjectSlugs: fileCfg.legacyProjectSlugs ?? [],
     archiveRepo: getArgValue('--repo') || fileCfg.archiveRepo,
     maxChunkMB: fileCfg.maxChunkMB ?? 40,
     maxMarkdownPartKB: fileCfg.maxMarkdownPartKB ?? 380,

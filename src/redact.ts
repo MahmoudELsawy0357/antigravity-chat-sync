@@ -8,6 +8,7 @@ export interface SecretRule {
 
 export const SECRET_RULES: SecretRule[] = [
   { label: 'JIRA_API_TOKEN', prefix: 'REDACTED_JIRA_TOKEN_', regex: /ATATT3x[A-Za-z0-9_\-=]{20,}/g },
+  { label: 'POSTMAN_API_KEY', prefix: 'REDACTED_PMAK_KEY_', regex: /\bPMAK-[A-Za-z0-9\-]{20,}\b/g },
   { label: 'GITHUB_TOKEN', prefix: 'REDACTED_GH_TOKEN_', regex: /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g },
   { label: 'GOOGLE_API_KEY', prefix: 'REDACTED_GAPI_KEY_', regex: /\bAIza[0-9A-Za-z\-_]{30,}\b/g },
   { label: 'SLACK_TOKEN', prefix: 'REDACTED_SLACK_TOK_', regex: /\bxox[baprs]-[0-9A-Za-z\-]{15,}\b/g },
@@ -96,6 +97,10 @@ export function sanitizeSqliteCopy(sqliteFilePath: string): number {
 
   if (totalRedacted > 0) {
     db.exec('VACUUM')
+  } else {
+    try {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    } catch {}
   }
 
   const check = db.query('PRAGMA integrity_check').get() as any

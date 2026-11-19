@@ -15,6 +15,7 @@ if (!projectSlug || !archiveRepo) {
 const config: SyncConfig = {
   projectSlug,
   projectDisplayName: getArgValue('--name') || projectSlug,
+  legacyProjectSlugs: [],
   archiveRepo,
   maxChunkMB: 40,
   maxMarkdownPartKB: 380,

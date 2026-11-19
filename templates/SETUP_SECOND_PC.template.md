@@ -21,5 +21,5 @@
      bun run restore --workspace "<DASHBOARD_PATH>"
      bun run sync --exclude "<Current-Conversation-ID>"
      ```
-5. **Confirm & Reload:**
-   - Report how many conversations were imported and ask the user to trigger **`Developer: Reload Window`** (`Ctrl+Shift+P`) so Antigravity refreshes its sidebar list immediately.
+5. **Confirm & Finalize (Antigravity 2.x):**
+   - Report how many conversations were imported and explain clearly: because Antigravity 2.x's running `language_server` keeps `agyhub_summaries_proto.pb` in RAM, the user must **fully quit Antigravity (`File -> Exit`)**, run `cd "<CHATS_REPO_PATH>" && bun run restore` once in an external terminal so the local `project_id` and `agyhub_summaries_proto.pb` persist cleanly, and reopen Antigravity.

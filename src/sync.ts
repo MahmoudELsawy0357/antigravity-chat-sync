@@ -62,10 +62,12 @@ const allTopCandidates = summaryDb
   .all() as any[]
 
 const slugLower = config.projectSlug.toLowerCase()
+const legacyLowers = config.legacyProjectSlugs.map(s => s.toLowerCase()).filter(Boolean)
 const localTopRows = allTopCandidates.filter(r => {
   if (excludedSet.has(r.conversation_id)) return false
   if (extraSet.has(r.conversation_id)) return true
-  return String(r.workspace_uris || '').toLowerCase().includes(slugLower)
+  const ws = String(r.workspace_uris || '').toLowerCase()
+  return ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))
 })
 
 const localTopIds = localTopRows.map(r => r.conversation_id)
@@ -130,10 +132,14 @@ for (const row of localAllRows) {
     if (existsSync(srcDbPath)) {
       const tmpCopy = join(tempWorkDir, `${id}.db`)
       cpSync(srcDbPath, tmpCopy)
+      if (existsSync(`${srcDbPath}-wal`)) cpSync(`${srcDbPath}-wal`, `${tmpCopy}-wal`)
+      if (existsSync(`${srcDbPath}-shm`)) cpSync(`${srcDbPath}-shm`, `${tmpCopy}-shm`)
       sanitizeSqliteCopy(tmpCopy)
       dbChunkNames = writeChunkedGzip(readFileSync(tmpCopy), dbChunksDir, `${id}.db`)
       try {
         rmSync(tmpCopy, { force: true })
+        rmSync(`${tmpCopy}-wal`, { force: true })
+        rmSync(`${tmpCopy}-shm`, { force: true })
       } catch {}
     }
 

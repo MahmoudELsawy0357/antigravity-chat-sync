@@ -11,8 +11,8 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 - 🎯 **Strict Project Isolation:** Filters `~/.gemini/antigravity` by `workspace_uris` so **only** conversations (and subagents) belonging to your target project are archived.
 - 📖 **GitHub-Ready Markdown + Artifacts:** Exports clean chronological transcripts and generated plans/walkthroughs, auto-splitting transcripts over `380 KB` into linked parts so GitHub renders every page in full.
 - 🔁 **Smart Multi-Device Additive Merge:** Syncs across any number of machines without overwriting newer local work or deleting conversations created on another machine.
-- 🗺️ **Automatic Cross-Drive Path Remapping:** Restores conversations onto machines with different folder paths (`D:\projects\app` <-> `C:\dev\app` <-> macOS/Linux) by adapting `workspace_uris` automatically.
-- 🔒 **Protobuf-Safe Secret Redaction:** Scrubs Jira (`ATATT3x...`), GitHub (`ghp_...`, `github_pat_...`), Google (`AIza...`), Slack, AWS, and OpenAI/Anthropic tokens from both Markdown and binary SQLite Protobuf blobs using **Same-Byte-Length Redaction + `VACUUM`**.
+- 🗺️ **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects each machine's local `~/.gemini/config/projects/*.json` `project_id`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` across drives/OSes (`D:\projects\app` <-> `C:\dev\app` <-> macOS/Linux).
+- 🔒 **Protobuf-Safe Secret Redaction:** Scrubs Jira (`ATATT3x...`), Postman (`PMAK-...`), GitHub (`ghp_...`, `github_pat_...`), Google (`AIza...`), Slack, AWS, and OpenAI/Anthropic tokens from both Markdown and binary SQLite Protobuf blobs using **Same-Byte-Length Redaction + `VACUUM`**.
 - 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
 - 🤖 **Zero-Terminal Daily Workflow:** Includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
 
@@ -69,11 +69,12 @@ gh repo create your-github-username/my-project-chats --private --source=. --remo
 ### 1. First Time on a Second Machine
 Send the generated `SETUP_SECOND_PC.md` file to Antigravity on the second machine — or run manually:
 ```bash
+# Close Antigravity completely first so language_server doesn't overwrite agyhub_summaries_proto.pb from RAM
 git clone https://github.com/your-github-username/my-project-chats.git
 cd my-project-chats
 bun run restore --workspace "/path/to/my-project-on-second-pc"
 ```
-Then run **`Developer: Reload Window`** (`Ctrl+Shift+P`) in Antigravity to refresh the sidebar.
+Then open Antigravity — all conversations will appear cleanly bound to your local project!
 
 ### 2. Everyday Syncing (Directly Inside Antigravity Chat)
 `bun run init` installs `CHATS_SYNC.md` into your project root and adds it to `.git/info/exclude` (never polluting your team's `.gitignore` or `git status`):
@@ -89,10 +90,11 @@ antigravity-chat-sync/
 ├── src/
 │   ├── config.ts              # Config loader & CLI flag parser
 │   ├── init.ts                # Project initializer & playbook installer (.git/info/exclude)
+│   ├── protobuf.ts            # Lossless Antigravity 2.x Protobuf & project_id/agyhub remapper
 │   ├── redact.ts              # Text redactor + Same-Byte-Length SQLite Protobuf sanitizer + VACUUM
 │   ├── markdown-exporter.ts   # JSONL & FTS byte-offset Markdown builder (<380 KB auto-pagination)
-│   ├── sync.ts                # Smart additive push (delta step_count check + gzip chunker)
-│   ├── restore.ts             # Non-destructive pull + cross-drive workspace_uris remapper
+│   ├── sync.ts                # Smart additive push (delta step_count check + WAL checkpoint + gzip chunker)
+│   ├── restore.ts             # Non-destructive pull + Antigravity 2.x .db/project_id/agyhub remapper
 │   └── verify.ts              # File-size & gunzipped secret-leak auditor
 ├── templates/
 │   ├── AGENT_BOOTSTRAPER_PROMPT.md  # Copy-paste prompt for 1-click AI setup
