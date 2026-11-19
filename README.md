@@ -12,6 +12,8 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 - 📖 **GitHub-Ready Markdown + Artifacts:** Exports clean chronological transcripts and generated plans/walkthroughs, auto-splitting transcripts over `380 KB` into linked parts so GitHub renders every page in full.
 - 🔁 **Smart Multi-Device Additive Merge:** Syncs across any number of machines without overwriting newer local work or deleting conversations created on another machine.
 - 🗺️ **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects each machine's local `~/.gemini/config/projects/*.json` `project_id`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` across drives/OSes (`D:\projects\app` <-> `C:\dev\app` <-> macOS/Linux).
+- 🧩 **In-Place Rebinding & Renamed Folders (`legacyProjectSlugs`):** Rebinds newer local chats and subagents carrying a foreign `project_id` in-place without downgrading step counts, and seamlessly remaps historical conversations from renamed project folders.
+- 💾 **SQLite WAL-Safe Sync & Restore:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)` before archiving, cleans stale WAL files on restore, warns if `language_server` is still running, and supports a fast `--index-only` rebind mode.
 - 🔒 **Protobuf-Safe Secret Redaction:** Scrubs Jira (`ATATT3x...`), Postman (`PMAK-...`), GitHub (`ghp_...`, `github_pat_...`), Google (`AIza...`), Slack, AWS, and OpenAI/Anthropic tokens from both Markdown and binary SQLite Protobuf blobs using **Same-Byte-Length Redaction + `VACUUM`**.
 - 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
 - 🤖 **Zero-Terminal Daily Workflow:** Includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
@@ -79,7 +81,30 @@ Then open Antigravity — all conversations will appear cleanly bound to your lo
 ### 2. Everyday Syncing (Directly Inside Antigravity Chat)
 `bun run init` installs `CHATS_SYNC.md` into your project root and adds it to `.git/info/exclude` (never polluting your team's `.gitignore` or `git status`):
 - **After finishing work on a machine:** Tag `@CHATS_SYNC.md` and type: *"Push/sync chats"*.
-- **When switching to another machine:** Tag `@CHATS_SYNC.md` and type: *"Pull/restore chats"*, then reload the window.
+- **When switching to another machine:** Tag `@CHATS_SYNC.md` and type: *"Pull/restore chats"* — or (recommended for Antigravity 2.x) close Antigravity completely (`File -> Exit`), run `cd my-project-chats && bun run restore`, and reopen Antigravity so `language_server` loads the freshly rebound `agyhub_summaries_proto.pb`.
+
+---
+
+## ⚙️ Configuration & CLI Flags
+
+`sync.config.json`:
+
+| Field | Description |
+|---|---|
+| `projectSlug` | Target project folder name used to isolate conversations (e.g. `my-app`). |
+| `projectDisplayName` | Friendly display name for `ARCHIVE_INDEX.md`. |
+| `legacyProjectSlugs` | Optional array of previous folder names (e.g. `["old-template-name"]`) to include and remap to `projectSlug`. |
+| `archiveRepo` | Private GitHub repo (`username/my-app-chats`). |
+| `maxChunkMB` | Max `.gz` chunk size (default `40` MB, well under GitHub's limit). |
+| `maxMarkdownPartKB` | Auto-split Markdown threshold (default `380` KB). |
+| `extraConversationIds` | Optional extra conversation UUIDs to force-include. |
+| `excludedConversationIds` | Conversation UUIDs to always skip (e.g. setup/sync utility chats). |
+
+Useful CLI flags:
+- `bun run restore --workspace "/path/to/project"` — Explicitly set the target workspace path on this machine.
+- `bun run restore --index-only` — Fast re-sync of `conversation_summaries.db` and `agyhub_summaries_proto.pb` without unpacking `.db`/brain archives.
+- `bun run sync --exclude "<conv-id>"` — Exclude the current utility chat during push.
+- `bun run sync --no-push` — Export and sanitize locally without committing or pushing.
 
 ---
 
