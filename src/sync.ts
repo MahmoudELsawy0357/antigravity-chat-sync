@@ -41,8 +41,10 @@ const existingMetaExtras: Record<string, { annotationPbtxt?: string; chapterTitl
   ? JSON.parse(readFileSync(metaExtrasPath, 'utf8'))
   : {}
 
+let prevExportedAt: string | null = null
 if (existsSync(manifestPath)) {
   const prevManifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  prevExportedAt = prevManifest.exported_at ?? null
   for (const r of prevManifest.records || []) existingRecordsMap.set(r.conversation_id, r)
 }
 if (existsSync(summariesPath)) {
@@ -195,7 +197,9 @@ for (const row of localAllRows) {
     }
   }
 
-  const copySum = { ...row, step_count: localSteps }
+  const resolvedTitle = row.title || prevSummary?.title || ''
+  const resolvedPreview = row.preview || prevSummary?.preview || ''
+  const copySum = { ...row, title: resolvedTitle, preview: resolvedPreview, step_count: localSteps }
   if (copySum.raw_summary instanceof Uint8Array) {
     copySum.raw_summary_b64 = Buffer.from(redactBufferSameLength(copySum.raw_summary).buf).toString('base64')
     delete copySum.raw_summary
@@ -321,15 +325,18 @@ writeFileSync(
 if (Object.keys(existingMetaExtras).length > 0) {
   writeFileSync(metaExtrasPath, JSON.stringify(existingMetaExtras, null, 2), 'utf8')
 }
+const nextRecords = mergedSummaries.map(s => existingRecordsMap.get(s.conversation_id)).filter(Boolean)
+const exportedAt = changedIds.size > 0 || !prevExportedAt ? new Date().toISOString() : prevExportedAt
+
 writeFileSync(
   manifestPath,
   JSON.stringify(
     {
       project: config.projectSlug,
-      exported_at: new Date().toISOString(),
+      exported_at: exportedAt,
       main_conversations_count: mergedTop.length,
       subagent_conversations_count: mergedSub.length,
-      records: mergedSummaries.map(s => existingRecordsMap.get(s.conversation_id)).filter(Boolean),
+      records: nextRecords,
     },
     null,
     2,
@@ -366,7 +373,11 @@ if (existsSync(join(REPO_ROOT, '.git')) && !process.argv.includes('--no-push')) 
       cwd: REPO_ROOT,
       stdio: 'inherit',
     })
-    spawnSync('git', ['push'], { cwd: REPO_ROOT, stdio: 'inherit' })
+    const pushRes = spawnSync('git', ['push'], { cwd: REPO_ROOT, stdio: 'inherit' })
+    if (pushRes.status !== 0) {
+      console.error('❌ Git push failed! Your commit is saved locally — run `git push` when back online.')
+      process.exit(1)
+    }
     console.log('🎉 Synced and pushed successfully!')
   }
 }
