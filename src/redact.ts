@@ -12,8 +12,24 @@ export const SECRET_RULES: SecretRule[] = [
   { label: 'GITHUB_TOKEN', prefix: 'REDACTED_GH_TOKEN_', regex: /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g },
   { label: 'GOOGLE_API_KEY', prefix: 'REDACTED_GAPI_KEY_', regex: /\bAIza[0-9A-Za-z\-_]{30,}\b/g },
   { label: 'SLACK_TOKEN', prefix: 'REDACTED_SLACK_TOK_', regex: /\bxox[baprs]-[0-9A-Za-z\-]{15,}\b/g },
+  { label: 'STRIPE_KEY', prefix: 'REDACTED_STRIPE_KEY_', regex: /\b(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{20,}\b/g },
   { label: 'OPENAI_OR_ANTHROPIC_KEY', prefix: 'REDACTED_SK_TOKEN_', regex: /\bsk-[A-Za-z0-9\-_]{25,}\b/g },
   { label: 'AWS_ACCESS_KEY', prefix: 'REDACTED_AWS_KEY_', regex: /\bAKIA[0-9A-Z]{16}\b/g },
+  {
+    label: 'PRIVATE_KEY_BLOCK',
+    prefix: 'REDACTED_PRIV_KEY_',
+    regex: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  },
+  {
+    label: 'DATABASE_URL_CREDENTIALS',
+    prefix: 'REDACTED_DB_URL_',
+    regex: /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/[^:\s"'`<>@\/]+:[^@\s"'`<>\/]{4,}@[^\s"'`<>]+/gi,
+  },
+  {
+    label: 'JWT_TOKEN',
+    prefix: 'REDACTED_JWT_TOKEN_',
+    regex: /\beyJ[A-Za-z0-9_\-]{15,}\.eyJ[A-Za-z0-9_\-]{15,}\.[A-Za-z0-9_\-]{20,}\b/g,
+  },
 ]
 
 /**

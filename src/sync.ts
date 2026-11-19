@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join, relative } from 'node:path'
 import { getAntigravityDir, loadConfig, REPO_ROOT } from './config'
 import { slugify, writeConversationMarkdown } from './markdown-exporter'
+import { getActualConvDbStepCount } from './protobuf'
 import { redactBufferSameLength, redactText, sanitizeSqliteCopy } from './redact'
 
 const config = loadConfig()
@@ -31,10 +32,14 @@ mkdirSync(brainArchivesDir, { recursive: true })
 
 const manifestPath = join(backupDir, 'manifest.json')
 const summariesPath = join(backupDir, 'summaries.json')
+const metaExtrasPath = join(backupDir, 'meta-extras.json')
 
 const existingRecordsMap = new Map<string, any>()
 const existingSummariesMap = new Map<string, any>()
 const existingFtsMap = new Map<string, any[]>()
+const existingMetaExtras: Record<string, { annotationPbtxt?: string; chapterTitlesB64?: string }> = existsSync(metaExtrasPath)
+  ? JSON.parse(readFileSync(metaExtrasPath, 'utf8'))
+  : {}
 
 if (existsSync(manifestPath)) {
   const prevManifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
@@ -81,17 +86,27 @@ const localChildRows =
 const localAllRows = [...localTopRows, ...localChildRows]
 
 function writeChunkedGzip(rawBuf: Uint8Array, destDir: string, baseName: string): string[] {
+  // Remove any previously written single or split chunks for this archive before writing new ones
+  const singleName = `${baseName}.gz`
+  const partPrefix = `${baseName}.gz.part`
+  for (const existing of readdirSync(destDir)) {
+    if (existing === singleName || existing.startsWith(partPrefix)) {
+      try {
+        rmSync(join(destDir, existing), { force: true })
+      } catch {}
+    }
+  }
+
   const gz = Bun.gzipSync(rawBuf)
   const files: string[] = []
   if (gz.byteLength <= maxChunkBytes) {
-    const fName = `${baseName}.gz`
-    writeFileSync(join(destDir, fName), gz)
-    files.push(fName)
+    writeFileSync(join(destDir, singleName), gz)
+    files.push(singleName)
   } else {
     let part = 0
     for (let offset = 0; offset < gz.byteLength; offset += maxChunkBytes) {
       part++
-      const fName = `${baseName}.gz.part${String(part).padStart(2, '0')}`
+      const fName = `${partPrefix}${String(part).padStart(2, '0')}`
       writeFileSync(join(destDir, fName), gz.subarray(offset, offset + maxChunkBytes))
       files.push(fName)
     }
@@ -107,7 +122,9 @@ for (const row of localAllRows) {
   const id = row.conversation_id
   const prevSummary = existingSummariesMap.get(id)
   const prevRecord = existingRecordsMap.get(id)
-  const localSteps = row.step_count ?? 0
+  const srcDbPath = join(agyDir, 'conversations', `${id}.db`)
+  const actualDbSteps = getActualConvDbStepCount(srcDbPath)
+  const localSteps = Math.max(row.step_count ?? 0, actualDbSteps > 0 ? actualDbSteps : 0)
   const prevSteps = prevSummary?.step_count ?? -1
 
   if (prevSummary && prevSteps > localSteps) {
@@ -128,7 +145,6 @@ for (const row of localAllRows) {
   if (!dbUnchanged) {
     changedIds.add(id)
     console.log(`📦 Packing & sanitizing conversation: ${row.title || row.preview || id} (${localSteps} steps)...`)
-    const srcDbPath = join(agyDir, 'conversations', `${id}.db`)
     if (existsSync(srcDbPath)) {
       const tmpCopy = join(tempWorkDir, `${id}.db`)
       cpSync(srcDbPath, tmpCopy)
@@ -179,12 +195,26 @@ for (const row of localAllRows) {
     }
   }
 
-  const copySum = { ...row }
+  const copySum = { ...row, step_count: localSteps }
   if (copySum.raw_summary instanceof Uint8Array) {
     copySum.raw_summary_b64 = Buffer.from(redactBufferSameLength(copySum.raw_summary).buf).toString('base64')
     delete copySum.raw_summary
   }
   existingSummariesMap.set(id, copySum)
+
+  // Capture lightweight per-conversation annotations & chapter titles if present
+  const annPath = join(agyDir, 'annotations', `${id}.pbtxt`)
+  const chapPath = join(agyDir, 'chapter_titles', `${id}.pb`)
+  const extraEntry: { annotationPbtxt?: string; chapterTitlesB64?: string } = { ...(existingMetaExtras[id] || {}) }
+  if (existsSync(annPath)) {
+    extraEntry.annotationPbtxt = redactText(readFileSync(annPath, 'utf8'))
+  }
+  if (existsSync(chapPath)) {
+    extraEntry.chapterTitlesB64 = Buffer.from(redactBufferSameLength(readFileSync(chapPath)).buf).toString('base64')
+  }
+  if (extraEntry.annotationPbtxt || extraEntry.chapterTitlesB64) {
+    existingMetaExtras[id] = extraEntry
+  }
 
   const ftsRows = summaryDb
     .query(`SELECT c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14 FROM conversations_fts_content WHERE c0 = '${id}'`)
@@ -288,6 +318,9 @@ writeFileSync(
   JSON.stringify({ summaries: mergedSummaries, fts: Array.from(existingFtsMap.values()).flat() }, null, 2),
   'utf8',
 )
+if (Object.keys(existingMetaExtras).length > 0) {
+  writeFileSync(metaExtrasPath, JSON.stringify(existingMetaExtras, null, 2), 'utf8')
+}
 writeFileSync(
   manifestPath,
   JSON.stringify(

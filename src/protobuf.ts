@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
-import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export interface WorkspaceUris {
@@ -123,6 +125,129 @@ export function hasLocalProjectConfig(agyDir: string, projectId: string): boolea
   if (!projectId || projectId === 'outside-of-project') return false
   const projectsConfigDir = join(dirname(agyDir), 'config', 'projects')
   return existsSync(join(projectsConfigDir, `${projectId}.json`))
+}
+
+export function getActualConvDbStepCount(convDbPath: string): number {
+  if (!existsSync(convDbPath)) return -1
+  try {
+    const db = new Database(convDbPath, { readonly: true })
+    const r = db.query('SELECT count(*) as c FROM steps').get() as { c: number } | null
+    db.close()
+    return r?.c ?? -1
+  } catch {
+    return -1
+  }
+}
+
+export function isLanguageServerRunning(): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const res = spawnSync(
+        'powershell',
+        ['-NoProfile', '-Command', "(Get-Process -Name 'language_server*' -ErrorAction SilentlyContinue).Count"],
+        { encoding: 'utf8' },
+      )
+      return Number(String(res.stdout || '0').trim()) > 0
+    }
+    const res = spawnSync('pgrep', ['-f', 'language_server'], { encoding: 'utf8' })
+    return res.status === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Rewrites foreign-machine Antigravity brain root paths inside restored Markdown/JSON/JSONL
+ * artifacts so file:// and local links resolve to the current user's Antigravity brain folder.
+ */
+export function rewriteForeignBrainPaths(text: string, localAgyDir: string): string {
+  const localForward = join(localAgyDir, 'brain').replace(/\\/g, '/')
+  const localBackslash = join(localAgyDir, 'brain').replace(/\//g, '\\')
+  const localEncodedUri = /^[A-Za-z]:\//.test(localForward)
+    ? `file:///${localForward[0].toLowerCase()}%3A${localForward.slice(2)}`
+    : `file://${localForward}`
+  const localPlainUri = /^[A-Za-z]:\//.test(localForward) ? `file:///${localForward}` : `file://${localForward}`
+
+  // Single-pass alternation prevents secondary regexes from double-matching already-rewritten file:/// URIs
+  const forwardRe =
+    /(file:\/\/\/[A-Za-z]%3[Aa]\/Users\/[^/\s"'`<>]+\/\.gemini\/antigravity\/brain)|(file:\/\/\/[A-Za-z]:\/Users\/[^/\s"'`<>]+\/\.gemini\/antigravity\/brain)|(file:\/\/\/(?:Users|home)\/[^/\s"'`<>]+\/\.gemini\/antigravity\/brain)|((?:[A-Za-z]:\/Users|\/Users|\/home)\/[^/\s"'`<>]+\/\.gemini\/antigravity\/brain)/g
+
+  let out = text.replace(forwardRe, (_m, gEnc, gPlainWin, gPosixUri) => {
+    if (gEnc) return localEncodedUri
+    if (gPlainWin || gPosixUri) return localPlainUri
+    return localForward
+  })
+
+  // Windows backslash paths (both JSON-escaped \\ and plain \)
+  out = out.replace(
+    /[A-Za-z]:\\\\Users\\\\[^\\\s"'`<>]+\\\\\.gemini\\\\antigravity\\\\brain/g,
+    localBackslash.replace(/\\/g, '\\\\'),
+  )
+  out = out.replace(
+    /[A-Za-z]:\\Users\\[^\\\s"'`<>]+\\\.gemini\\antigravity\\brain/g,
+    localBackslash,
+  )
+  return out
+}
+
+function detectGitDefaultBranch(workspacePath: string): string {
+  try {
+    const res = spawnSync('git', ['-C', workspacePath, 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' })
+    const branch = String(res.stdout || '').trim()
+    if (branch) return branch
+  } catch {}
+  return 'main'
+}
+
+/**
+ * Ensures a local Antigravity 2.x project config JSON exists for the target workspace.
+ * If this is a brand-new machine where the folder hasn't been opened in Antigravity yet,
+ * creates ~/.gemini/config/projects/<uuid>.json automatically so restored chats bind cleanly.
+ */
+export function ensureLocalProjectId(
+  agyDir: string,
+  targetWorkspacePath: string | null,
+  targetUris: WorkspaceUris | null,
+  projectSlug: string,
+): { projectId: string | null; created: boolean } {
+  const existing = detectLocalProjectId(agyDir, targetUris)
+  if (existing) return { projectId: existing, created: false }
+  if (!targetWorkspacePath || !targetUris || !existsSync(targetWorkspacePath)) {
+    return { projectId: null, created: false }
+  }
+
+  const projectsConfigDir = join(dirname(agyDir), 'config', 'projects')
+  mkdirSync(projectsConfigDir, { recursive: true })
+  const newId = randomUUID()
+  const isGitRepo = existsSync(join(targetWorkspacePath, '.git'))
+  const resource = isGitRepo
+    ? {
+        gitFolder: {
+          folderUri: targetUris.encodedUri,
+          defaultBranch: detectGitDefaultBranch(targetWorkspacePath),
+        },
+      }
+    : {
+        folder: {
+          folderUri: targetUris.encodedUri,
+        },
+      }
+
+  const cfg = {
+    id: newId,
+    name: projectSlug,
+    projectResources: {
+      resources: [resource],
+    },
+    permissionGrants: {
+      v2Migrated: true,
+    },
+    settings: {},
+    isWorkspaceOnly: false,
+  }
+
+  writeFileSync(join(projectsConfigDir, `${newId}.json`), JSON.stringify(cfg, null, 2), 'utf8')
+  return { projectId: newId, created: true }
 }
 
 /**

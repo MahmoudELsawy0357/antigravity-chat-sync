@@ -23,6 +23,15 @@ export function cleanUserPrompt(raw: string): string {
   return redactText(s.trim())
 }
 
+function normalizeArtifactLinks(md: string, convId: string, prefix: string): string {
+  const escapedId = convId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(
+    `file:\\/\\/\\/(?:[A-Za-z](?::|%3[Aa])\\/Users\\/[^/\\s"')\\]]+|Users\\/[^/\\s"')\\]]+|home\\/[^/\\s"')\\]]+)\\/\\.gemini\\/antigravity\\/brain\\/${escapedId}\\/([^/\\s"')\\]]+\\.md)`,
+    'g',
+  )
+  return md.replace(re, (_m, fileName) => `${prefix}${encodeURIComponent(fileName)}`)
+}
+
 export function slugify(input: string): string {
   return (
     input
@@ -160,7 +169,11 @@ export function writeConversationMarkdown(opts: {
       if (entry.isFile() && !entry.name.endsWith('.metadata.json')) {
         const artDir = join(convDir, 'artifacts')
         mkdirSync(artDir, { recursive: true })
-        writeFileSync(join(artDir, entry.name), redactText(readFileSync(join(brainSrc, entry.name), 'utf8')), 'utf8')
+        writeFileSync(
+          join(artDir, entry.name),
+          normalizeArtifactLinks(redactText(readFileSync(join(brainSrc, entry.name), 'utf8')), id, './'),
+          'utf8',
+        )
         copiedArtifacts.push(entry.name)
       }
     }
@@ -195,7 +208,7 @@ export function writeConversationMarkdown(opts: {
             .map(x => `- ${redactText(x)}`)
             .join('\n')}\n\n</details>`
         : ''
-    return `${roleHeader}\n\n${t.text}${tools}\n\n---\n`
+    return `${roleHeader}\n\n${normalizeArtifactLinks(t.text, id, './artifacts/')}${tools}\n\n---\n`
   })
 
   const fullMd = headerMd + '\n\n' + turnBlocks.join('\n')

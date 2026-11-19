@@ -5,9 +5,12 @@ import { dirname, join, resolve } from 'node:path'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import {
   createProjectAdapter,
-  detectLocalProjectId,
+  ensureLocalProjectId,
+  getActualConvDbStepCount,
   hasLocalProjectConfig,
+  isLanguageServerRunning,
   patchAgyhubSummariesProto,
+  rewriteForeignBrainPaths,
   toWorkspaceUris,
 } from './protobuf'
 
@@ -17,23 +20,7 @@ const backupDir = join(REPO_ROOT, 'antigravity-backup')
 const dbChunksDir = join(backupDir, 'db-chunks')
 const brainArchivesDir = join(backupDir, 'brain-archives')
 const isIndexOnly = process.argv.includes('--index-only')
-
-function isLanguageServerRunning(): boolean {
-  try {
-    if (process.platform === 'win32') {
-      const res = spawnSync(
-        'powershell',
-        ['-NoProfile', '-Command', "(Get-Process -Name 'language_server*' -ErrorAction SilentlyContinue).Count"],
-        { encoding: 'utf8' },
-      )
-      return Number(String(res.stdout || '0').trim()) > 0
-    }
-    const res = spawnSync('pgrep', ['-f', 'language_server'], { encoding: 'utf8' })
-    return res.status === 0
-  } catch {
-    return false
-  }
-}
+const waitForExit = process.argv.includes('--wait')
 
 if (!isIndexOnly && existsSync(join(REPO_ROOT, '.git'))) {
   const remotes = spawnSync('git', ['remote'], { cwd: REPO_ROOT, encoding: 'utf8' })
@@ -56,7 +43,17 @@ if (!targetWorkspacePath) {
 }
 
 const targetUris = targetWorkspacePath ? toWorkspaceUris(targetWorkspacePath) : null
-const localProjectId = detectLocalProjectId(agyDir, targetUris)
+const { projectId: localProjectId, created: createdProjectConfig } = ensureLocalProjectId(
+  agyDir,
+  targetWorkspacePath,
+  targetUris,
+  config.projectSlug,
+)
+
+if (createdProjectConfig && localProjectId) {
+  console.log(`🆕 Created local Antigravity project config (${localProjectId}) for: ${targetWorkspacePath}`)
+}
+
 const adapter = createProjectAdapter({
   projectSlug: config.projectSlug,
   legacyProjectSlugs: config.legacyProjectSlugs,
@@ -67,18 +64,6 @@ const adapter = createProjectAdapter({
 function readChunkedGzip(dir: string, chunkNames: string[]): Uint8Array {
   const buffers = chunkNames.map(name => readFileSync(join(dir, name)))
   return Bun.gunzipSync(Buffer.concat(buffers))
-}
-
-function getActualConvDbStepCount(convDbPath: string): number {
-  if (!existsSync(convDbPath)) return -1
-  try {
-    const db = new Database(convDbPath, { readonly: true })
-    const r = db.query('SELECT count(*) as c FROM steps').get() as { c: number } | null
-    db.close()
-    return r?.c ?? -1
-  } catch {
-    return -1
-  }
 }
 
 function adaptConvDbMetadataBlob(convDbPath: string): boolean {
@@ -113,6 +98,8 @@ function adaptConvDbMetadataBlob(convDbPath: string): boolean {
 
 const manifestPath = join(backupDir, 'manifest.json')
 const summariesPath = join(backupDir, 'summaries.json')
+const metaExtrasPath = join(backupDir, 'meta-extras.json')
+
 if (!existsSync(manifestPath) || !existsSync(summariesPath)) {
   console.error('❌ Backup manifest or summaries.json not found. Run `bun run sync` first on a machine with conversations.')
   process.exit(1)
@@ -120,17 +107,24 @@ if (!existsSync(manifestPath) || !existsSync(summariesPath)) {
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 const { summaries, fts } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+const metaExtras: Record<string, { annotationPbtxt?: string; chapterTitlesB64?: string }> = existsSync(metaExtrasPath)
+  ? JSON.parse(readFileSync(metaExtrasPath, 'utf8'))
+  : {}
 const summaryById = new Map<string, any>(summaries.map((s: any) => [s.conversation_id, s]))
 
 const convsTargetDir = join(agyDir, 'conversations')
 const brainTargetDir = join(agyDir, 'brain')
+const annotationsDir = join(agyDir, 'annotations')
+const chapterTitlesDir = join(agyDir, 'chapter_titles')
 mkdirSync(convsTargetDir, { recursive: true })
 mkdirSync(brainTargetDir, { recursive: true })
 
 let restoredCount = 0
 let skippedCount = 0
 let metadataPatchedCount = 0
+let extrasRestoredCount = 0
 
+// Stage 1: Unpack missing/newer .db and brain/ archives
 if (!isIndexOnly) {
   for (const rec of manifest.records) {
     const id = rec.conversation_id
@@ -140,7 +134,6 @@ if (!isIndexOnly) {
     const localActualSteps = getActualConvDbStepCount(localDbPath)
 
     if (localActualSteps >= remoteSteps && localActualSteps > 0) {
-      if (adaptConvDbMetadataBlob(localDbPath)) metadataPatchedCount++
       skippedCount++
       continue
     }
@@ -149,7 +142,6 @@ if (!isIndexOnly) {
       try { rmSync(`${localDbPath}-wal`, { force: true }) } catch {}
       try { rmSync(`${localDbPath}-shm`, { force: true }) } catch {}
       writeFileSync(localDbPath, readChunkedGzip(dbChunksDir, rec.db_chunks))
-      if (adaptConvDbMetadataBlob(localDbPath)) metadataPatchedCount++
     }
 
     if (Array.isArray(rec.brain_files_bundle) && rec.brain_files_bundle.length > 0) {
@@ -158,7 +150,12 @@ if (!isIndexOnly) {
       for (const f of files) {
         const targetFile = join(brainTargetDir, id, f.relPath)
         mkdirSync(dirname(targetFile), { recursive: true })
-        writeFileSync(targetFile, Buffer.from(f.base64, 'base64'))
+        let contentBuf = Buffer.from(f.base64, 'base64')
+        if (/\.(md|json|jsonl|txt)$/i.test(f.relPath)) {
+          const rewritten = rewriteForeignBrainPaths(contentBuf.toString('utf8'), agyDir)
+          contentBuf = Buffer.from(rewritten, 'utf8')
+        }
+        writeFileSync(targetFile, contentBuf)
       }
     }
 
@@ -167,7 +164,45 @@ if (!isIndexOnly) {
   }
 }
 
-// Precompute adapted raw summaries for all archive records whose remote version >= local steps
+// Optional --wait mode: pause right before patching metadata/indexes until Antigravity closes cleanly
+if (waitForExit && isLanguageServerRunning()) {
+  console.log('\n⏳ Waiting for Antigravity (language_server) to close...')
+  console.log('👉 Quit Antigravity completely (File -> Exit) now; restore will finalize automatically.')
+  while (isLanguageServerRunning()) {
+    await Bun.sleep(500)
+  }
+  await Bun.sleep(500)
+  console.log('✅ Antigravity closed! Finalizing metadata & indexes...')
+}
+
+// Stage 2: Ensure trajectory_metadata_blob & extras (annotations/chapter_titles) are applied to all archive records
+for (const rec of manifest.records) {
+  const id = rec.conversation_id
+  const localDbPath = join(convsTargetDir, `${id}.db`)
+  if (adaptConvDbMetadataBlob(localDbPath)) metadataPatchedCount++
+
+  const extra = metaExtras[id]
+  if (extra) {
+    if (extra.annotationPbtxt) {
+      mkdirSync(annotationsDir, { recursive: true })
+      const annTarget = join(annotationsDir, `${id}.pbtxt`)
+      if (!existsSync(annTarget)) {
+        writeFileSync(annTarget, extra.annotationPbtxt, 'utf8')
+        extrasRestoredCount++
+      }
+    }
+    if (extra.chapterTitlesB64) {
+      mkdirSync(chapterTitlesDir, { recursive: true })
+      const chapTarget = join(chapterTitlesDir, `${id}.pb`)
+      if (!existsSync(chapTarget)) {
+        writeFileSync(chapTarget, Buffer.from(extra.chapterTitlesB64, 'base64'))
+        extrasRestoredCount++
+      }
+    }
+  }
+}
+
+// Stage 3: Precompute adapted raw summaries for all archive records whose remote version >= local steps
 const eligibleIds = new Set<string>()
 const adaptedRawById = new Map<string, Buffer>()
 const remoteStepsById = new Map<string, number>()
@@ -186,6 +221,7 @@ for (const r of summaries) {
   }
 }
 
+// Stage 4: Update conversation_summaries.db + in-place rebind of newer local / foreign-project conversations
 const summaryDbPath = join(agyDir, 'conversation_summaries.db')
 const slugLower = config.projectSlug.toLowerCase()
 let localReboundCount = 0
@@ -278,7 +314,9 @@ if (existsSync(summaryDbPath)) {
     )
     for (const lr of localRows) {
       if (eligibleIds.has(lr.conversation_id)) continue
-      const foreignProject = Boolean(lr.project_id && localProjectId && lr.project_id !== localProjectId && !hasLocalProjectConfig(agyDir, lr.project_id))
+      const foreignProject = Boolean(
+        lr.project_id && localProjectId && lr.project_id !== localProjectId && !hasLocalProjectConfig(agyDir, lr.project_id),
+      )
       const newWs = adapter.adaptWorkspaceUrisJson(lr.workspace_uris || '[]')
       const newProj = localProjectId && (foreignProject || !lr.project_id) ? localProjectId : lr.project_id
       const origRaw = lr.raw_summary ? Buffer.from(lr.raw_summary) : null
@@ -307,7 +345,7 @@ if (existsSync(summaryDbPath)) {
   sdb.close()
 }
 
-// Update Antigravity 2.x primary summary index (agyhub_summaries_proto.pb)
+// Stage 5: Update Antigravity 2.x primary summary index (agyhub_summaries_proto.pb)
 const hubUpdated = patchAgyhubSummariesProto({
   agyDir,
   adaptedRawById,
@@ -316,16 +354,15 @@ const hubUpdated = patchAgyhubSummariesProto({
 })
 
 console.log(
-  `\n🎉 Restore complete! Imported/updated: ${restoredCount} | Up-to-date: ${skippedCount} | .db metadata patched: ${metadataPatchedCount} | Index synced: ${eligibleIds.size + localReboundCount} (${hubUpdated} agyhub updates).`,
+  `\n🎉 Restore complete! Imported/updated: ${restoredCount} | Up-to-date: ${skippedCount} | .db metadata patched: ${metadataPatchedCount} | Extras restored: ${extrasRestoredCount} | Index synced: ${eligibleIds.size + localReboundCount} (${hubUpdated} agyhub updates).`,
 )
 if (targetWorkspacePath) {
   console.log(`🔗 Bound workspace to: ${targetWorkspacePath}${localProjectId ? ` (Project ID: ${localProjectId})` : ''}`)
 }
 if (isLanguageServerRunning()) {
   console.log('\n⚠️ Warning: Antigravity (language_server) is currently running and may overwrite agyhub_summaries_proto.pb from RAM!')
-  console.log('👉 For changes to stick 100%, fully quit Antigravity (File -> Exit), then run from an external terminal:')
-  console.log(`   cd "${REPO_ROOT}" && bun run restore`)
-  console.log('   Then reopen Antigravity.')
+  console.log('👉 Tip: Run with `--wait` from an external terminal so it auto-applies the instant you close Antigravity:')
+  console.log(`   cd "${REPO_ROOT}" && bun run restore --wait`)
 } else {
   console.log('✅ Antigravity is closed — index updates are safely persisted. You can open Antigravity now!')
 }

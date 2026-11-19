@@ -1,7 +1,7 @@
 # 🔒 Security & Binary Protobuf Secret Redaction
 
 Archiving real engineering conversations to GitHub introduces two critical security challenges:
-1. **Credential Exposure:** Prompts, `.env` reads, or CLI commands recorded in chat steps may contain live API tokens (Jira `ATATT3x...`, Postman `PMAK-...`, GitHub `ghp_...` / `github_pat_...`, Google `AIza...`, Slack `xox...`, OpenAI/Anthropic `sk-...`, AWS `AKIA...`).
+1. **Credential Exposure:** Prompts, `.env` reads, or CLI commands recorded in chat steps may contain live API tokens (Jira `ATATT3x...`, Postman `PMAK-...`, GitHub `ghp_...` / `github_pat_...`, Google `AIza...`, Slack `xox...`, Stripe `sk_live_...`/`rk_live_...`, OpenAI/Anthropic `sk-...`, AWS `AKIA...`, Private Key PEM blocks, Database URLs with embedded passwords, and JWTs).
 2. **GitHub Push Protection & Protobuf Wire Integrity:** GitHub scans pushed commits and blocks pushes containing known secret formats. However, inside `conversations/<id>.db`, chat steps are stored as **serialized binary Protocol Buffers (`BLOB`)** inside SQLite pages.
 
 ---
@@ -25,4 +25,4 @@ If a 192-byte Jira token inside `steps.step_payload` were replaced with a 12-byt
    When SQLite updates a large `BLOB` row, older B-tree overflow pages can remain unreferenced inside the database file's free-page list — still visible to raw binary/gzip scanners! Running `VACUUM` rebuilds the SQLite file from scratch, eliminating every trace of unreferenced pages (and often shrinking compressed `.db.gz` size by 30%+).
 4. **Integrity & Zero-Leak Verification:**
    - Every sanitized database must return `ok` on `PRAGMA integrity_check`.
-   - `bun run verify` gunzips every `.gz` archive in memory and scans raw bytes against all secret rules before pushing.
+   - `bun run verify` gunzips every `.gz` archive — **and reassembles multi-part `.gz.part01`/`.part02` archives** — in memory and scans raw bytes against all secret rules before pushing.

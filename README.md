@@ -11,10 +11,10 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 - 🎯 **Strict Project Isolation:** Filters `~/.gemini/antigravity` by `workspace_uris` so **only** conversations (and subagents) belonging to your target project are archived.
 - 📖 **GitHub-Ready Markdown + Artifacts:** Exports clean chronological transcripts and generated plans/walkthroughs, auto-splitting transcripts over `380 KB` into linked parts so GitHub renders every page in full.
 - 🔁 **Smart Multi-Device Additive Merge:** Syncs across any number of machines without overwriting newer local work or deleting conversations created on another machine.
-- 🗺️ **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects each machine's local `~/.gemini/config/projects/*.json` `project_id`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` across drives/OSes (`D:\projects\app` <-> `C:\dev\app` <-> macOS/Linux).
-- 🧩 **In-Place Rebinding & Renamed Folders (`legacyProjectSlugs`):** Rebinds newer local chats and subagents carrying a foreign `project_id` in-place without downgrading step counts, and seamlessly remaps historical conversations from renamed project folders.
-- 💾 **SQLite WAL-Safe Sync & Restore:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)` before archiving, cleans stale WAL files on restore, warns if `language_server` is still running, and supports a fast `--index-only` rebind mode.
-- 🔒 **Protobuf-Safe Secret Redaction:** Scrubs Jira (`ATATT3x...`), Postman (`PMAK-...`), GitHub (`ghp_...`, `github_pat_...`), Google (`AIza...`), Slack, AWS, and OpenAI/Anthropic tokens from both Markdown and binary SQLite Protobuf blobs using **Same-Byte-Length Redaction + `VACUUM`**.
+- 🗺️ **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects (or auto-creates on brand-new machines) `~/.gemini/config/projects/*.json`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` & cross-user `brain/` artifact links across drives/OSes.
+- 🧩 **In-Place Rebinding, Extras & Renamed Folders (`legacyProjectSlugs`):** Rebinds newer local chats and subagents carrying a foreign `project_id` in-place without downgrading step counts, preserves `annotations/` & `chapter_titles/`, and remaps historical conversations from renamed project folders.
+- 💾 **SQLite WAL-Safe Sync, `--wait` Restore & `doctor`:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)`, cleans orphan split chunks, supports `bun run restore --wait` (auto-finalizes the instant Antigravity closes), and provides `bun run status` / `bun run doctor` health diagnostics.
+- 🔒 **Protobuf-Safe Secret Redaction & Multi-Part Audit:** Scrubs Jira, Postman (`PMAK-...`), GitHub, Google, Slack, Stripe, OpenAI/Anthropic, AWS, Private Keys, DB URLs with passwords, and JWTs using **Same-Byte-Length Redaction + `VACUUM`**, and `bun run verify` reassembles & scans multi-part `.gz.partNN` archives before push.
 - 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
 - 🤖 **Zero-Terminal Daily Workflow:** Includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
 
@@ -100,11 +100,15 @@ Then open Antigravity — all conversations will appear cleanly bound to your lo
 | `extraConversationIds` | Optional extra conversation UUIDs to force-include. |
 | `excludedConversationIds` | Conversation UUIDs to always skip (e.g. setup/sync utility chats). |
 
-Useful CLI flags:
+Useful CLI commands & flags:
+- `bun run status` / `bun run doctor` — Read-only sync & project health dashboard (local vs archive step counts, foreign `project_id` detection, `language_server` status).
+- `bun run restore --wait` — Unpacks archives immediately, waits for you to quit Antigravity, then persists all Protobuf/SQLite indexes with zero race condition.
 - `bun run restore --workspace "/path/to/project"` — Explicitly set the target workspace path on this machine.
 - `bun run restore --index-only` — Fast re-sync of `conversation_summaries.db` and `agyhub_summaries_proto.pb` without unpacking `.db`/brain archives.
 - `bun run sync --exclude "<conv-id>"` — Exclude the current utility chat during push.
 - `bun run sync --no-push` — Export and sanitize locally without committing or pushing.
+- `bun run verify` — Audits all Markdown, `.gz`, and multi-part `.gz.partNN` archives for secret leaks & file-size limits.
+- `bun test` — Runs automated unit tests for Protobuf remapping, secret redaction, and multi-part archive verification.
 
 ---
 
@@ -118,9 +122,14 @@ antigravity-chat-sync/
 │   ├── protobuf.ts            # Lossless Antigravity 2.x Protobuf & project_id/agyhub remapper
 │   ├── redact.ts              # Text redactor + Same-Byte-Length SQLite Protobuf sanitizer + VACUUM
 │   ├── markdown-exporter.ts   # JSONL & FTS byte-offset Markdown builder (<380 KB auto-pagination)
-│   ├── sync.ts                # Smart additive push (delta step_count check + WAL checkpoint + gzip chunker)
-│   ├── restore.ts             # Non-destructive pull + Antigravity 2.x .db/project_id/agyhub remapper
-│   └── verify.ts              # File-size & gunzipped secret-leak auditor
+│   ├── sync.ts                # Smart additive push (actual DB steps + WAL checkpoint + orphan chunk cleanup + extras)
+│   ├── restore.ts             # Non-destructive pull + --wait + auto project config + cross-user brain link rewrite
+│   ├── status.ts              # Read-only sync & Antigravity 2.x project health doctor (`bun run status`)
+│   └── verify.ts              # File-size & gunzipped (single + multi-part .partNN) secret-leak auditor
+├── tests/
+│   ├── protobuf.test.ts       # Unit tests for lossless Protobuf & agyhub/project_id remapping
+│   ├── redact.test.ts         # Unit tests for secret rules, same-length binary redaction & VACUUM
+│   └── verify-chunks.test.ts  # Unit tests for multi-part .gz.partNN secret leak detection
 ├── templates/
 │   ├── AGENT_BOOTSTRAPER_PROMPT.md  # Copy-paste prompt for 1-click AI setup
 │   ├── CHATS_SYNC.template.md       # Daily chat-driven sync playbook template
