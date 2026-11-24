@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+export const PROTO_WIRE_SCHEMA_ID = 'd197e124-2b46-7b82-eb2e-fed011db8749'
+export const ARCHIVE_SCHEMA_REV = 'acs-2.0-d197e124'
+
 export interface WorkspaceUris {
   plainUri: string
   encodedUri: string

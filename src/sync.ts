@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join, relative } from 'node:path'
 import { getAntigravityDir, loadConfig, REPO_ROOT } from './config'
 import { slugify, writeConversationMarkdown } from './markdown-exporter'
-import { getActualConvDbStepCount } from './protobuf'
+import { ARCHIVE_SCHEMA_REV, getActualConvDbStepCount } from './protobuf'
 import { redactBufferSameLength, redactText, sanitizeSqliteCopy } from './redact'
 
 const config = loadConfig()
@@ -332,6 +332,7 @@ writeFileSync(
   manifestPath,
   JSON.stringify(
     {
+      schema_rev: ARCHIVE_SCHEMA_REV,
       project: config.projectSlug,
       exported_at: exportedAt,
       main_conversations_count: mergedTop.length,

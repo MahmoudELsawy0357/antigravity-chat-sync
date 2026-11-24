@@ -145,14 +145,14 @@ describe('protobuf wire helpers & Antigravity 2.x remapping', () => {
     mkdirSync(agyDir, { recursive: true })
     mkdirSync(targetWs, { recursive: true })
     const targetUris = toWorkspaceUris(targetWs)
-    const localPid = '11111111-1111-1111-1111-111111111111'
+    const localPid = 'd197e124-2b46-7b82-eb2e-fed011db8749'
 
     const unrelatedRaw = buildSampleRawSummary({
       title: 'Unrelated App',
       steps: 50,
       plainWsUris: ['file:///e:/other-project'],
       encodedWsUris: ['file:///e%3A/other-project'],
-      projectId: '99999999-9999-9999-9999-999999999999',
+      projectId: 'da403ebc-f241-d68c-e7bc-7f7b4ec6f67b',
     })
     const newerLocalRaw = buildSampleRawSummary({
       title: 'My App Newer Chat',
