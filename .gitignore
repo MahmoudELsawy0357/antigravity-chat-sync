@@ -2,3 +2,4 @@ node_modules/
 .tmp-sanitize/
 .DS_Store
 *.log
+start-antigravity.cmd

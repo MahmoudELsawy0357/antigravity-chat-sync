@@ -8,6 +8,8 @@
     "init": "bun run src/init.ts",
     "sync": "bun run src/sync.ts",
     "restore": "bun run src/restore.ts",
+    "launch": "bun run src/launch.ts",
+    "shortcut": "bun run src/shortcut.ts",
     "status": "bun run src/status.ts",
     "doctor": "bun run src/status.ts",
     "verify": "bun run src/verify.ts",

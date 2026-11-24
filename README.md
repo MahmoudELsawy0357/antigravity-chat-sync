@@ -16,7 +16,8 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 - 💾 **SQLite WAL-Safe Sync, `--wait` Restore & `doctor`:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)`, cleans orphan split chunks, supports `bun run restore --wait` (auto-finalizes the instant Antigravity closes), and provides `bun run status` / `bun run doctor` health diagnostics.
 - 🔒 **Protobuf-Safe Secret Redaction & Multi-Part Audit:** Scrubs Jira, Postman (`PMAK-...`), GitHub, Google, Slack, Stripe, OpenAI/Anthropic, AWS, Private Keys, DB URLs with passwords, and JWTs using **Same-Byte-Length Redaction + `VACUUM`**, and `bun run verify` reassembles & scans multi-part `.gz.partNN` archives before push.
 - 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
-- 🤖 **Zero-Terminal Daily Workflow:** Includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
+- 🤖 **1-Click Desktop Launcher (`bun run shortcut`):** Generates a native Desktop shortcut with the Antigravity icon that automatically pulls latest chats before opening Antigravity and auto-syncs your work to GitHub the moment you close Antigravity!
+- 📄 **Zero-Terminal Playbooks:** Also includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
 
 ---
 
@@ -101,6 +102,8 @@ Then open Antigravity — all conversations will appear cleanly bound to your lo
 | `excludedConversationIds` | Conversation UUIDs to always skip (e.g. setup/sync utility chats). |
 
 Useful CLI commands & flags:
+- `bun run shortcut` — Creates a 1-click Desktop icon (`<Project> (Antigravity)`) that auto-restores on launch and auto-syncs on exit.
+- `bun run launch` — Runs the auto-restore -> launch Antigravity -> auto-sync-on-close lifecycle directly.
 - `bun run status` / `bun run doctor` — Read-only sync & project health dashboard (local vs archive step counts, foreign `project_id` detection, `language_server` status).
 - `bun run restore --wait` — Unpacks archives immediately, waits for you to quit Antigravity, then persists all Protobuf/SQLite indexes with zero race condition.
 - `bun run restore --workspace "/path/to/project"` — Explicitly set the target workspace path on this machine.
