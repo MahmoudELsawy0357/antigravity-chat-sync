@@ -1,11 +1,18 @@
+import { Database } from 'bun:sqlite'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { getArgValue, loadConfig, REPO_ROOT } from './config'
-import { isLanguageServerRunning } from './protobuf'
+import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
+import { getActualConvDbStepCount, isLanguageServerRunning } from './protobuf'
+
+const IDLE_SYNC_MS = 3 * 60 * 1000 // 3 minutes of quiet after new steps
+const MAX_UNSYNCED_MS = 15 * 60 * 1000 // Max 15 minutes during non-stop work
+const RETRY_BACKOFF_MS = 5 * 60 * 1000 // 5 minutes backoff if offline
+const POLL_INTERVAL_MS = 15 * 1000 // Check every 15s (local disk only, 0 network)
 
 const config = loadConfig()
+const agyDir = getAntigravityDir()
 const explicitWs = getArgValue('--workspace')
 let targetWorkspacePath: string | null = explicitWs ? resolve(explicitWs) : null
 if (!targetWorkspacePath) {
@@ -34,6 +41,66 @@ function findAntigravityExecutable(): string | null {
     if (which.status === 0 && which.stdout.trim()) return which.stdout.trim()
   }
   return null
+}
+
+const slugLower = config.projectSlug.toLowerCase()
+const legacyLowers = config.legacyProjectSlugs.map(s => s.toLowerCase()).filter(Boolean)
+const excludedSet = new Set(config.excludedConversationIds)
+const extraSet = new Set(config.extraConversationIds)
+
+function getLocalProjectTotalSteps(): number {
+  const summaryDbPath = join(agyDir, 'conversation_summaries.db')
+  if (!existsSync(summaryDbPath)) return 0
+  try {
+    const db = new Database(summaryDbPath, { readonly: true })
+    const topRows = db
+      .query("SELECT conversation_id, step_count, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = ''")
+      .all() as Array<{ conversation_id: string; step_count: number; workspace_uris: string }>
+
+    const matchedTopIds: string[] = []
+    let total = 0
+    for (const r of topRows) {
+      if (excludedSet.has(r.conversation_id)) continue
+      const ws = String(r.workspace_uris || '').toLowerCase()
+      if (extraSet.has(r.conversation_id) || ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))) {
+        matchedTopIds.push(r.conversation_id)
+        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${r.conversation_id}.db`))
+        total += Math.max(r.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+      }
+    }
+
+    if (matchedTopIds.length > 0) {
+      const ph = matchedTopIds.map(() => '?').join(',')
+      const childRows = db
+        .query(`SELECT conversation_id, step_count FROM conversation_summaries WHERE parent_conversation_id IN (${ph})`)
+        .all(...matchedTopIds) as Array<{ conversation_id: string; step_count: number }>
+      for (const c of childRows) {
+        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${c.conversation_id}.db`))
+        total += Math.max(c.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+      }
+    }
+    db.close()
+    return total
+  } catch {
+    return 0
+  }
+}
+
+function runSyncAndVerify(reason: string): boolean {
+  const stamp = new Date().toLocaleTimeString()
+  console.log(`\n⬆️ [${stamp}] Auto-syncing "${config.projectDisplayName}" (${reason})...`)
+  const syncRes = spawnSync(process.execPath, ['run', join(import.meta.dir, 'sync.ts')], {
+    cwd: REPO_ROOT,
+    stdio: 'inherit',
+  })
+  if (syncRes.status === 0) {
+    spawnSync(process.execPath, ['run', join(import.meta.dir, 'verify.ts')], {
+      cwd: REPO_ROOT,
+      stdio: 'inherit',
+    })
+    return true
+  }
+  return false
 }
 
 const agyExe = findAntigravityExecutable()
@@ -73,26 +140,56 @@ if (!isLanguageServerRunning()) {
   process.exit(0)
 }
 
-console.log('🟢 Antigravity is open! Keep working normally — as soon as you close Antigravity, your chats will auto-sync to GitHub.')
+console.log(
+  '🟢 Antigravity is open! Auto-sync runs after 3 min of idle (or every 15 min of active work), plus on exit.',
+)
 
-// Poll lightly every 2 seconds until Antigravity (language_server) closes completely
+let lastSyncedSteps = getLocalProjectTotalSteps()
+let prevPolledSteps = lastSyncedSteps
+let lastActivityAt = Date.now()
+let unsyncedSince: number | null = null
+let nextAllowedSyncAt = 0
+
+// Watch while Antigravity is open: periodic smart auto-sync + exit detection
 while (isLanguageServerRunning()) {
-  await Bun.sleep(2000)
+  await Bun.sleep(POLL_INTERVAL_MS)
+  if (!isLanguageServerRunning()) break
+
+  const curSteps = getLocalProjectTotalSteps()
+  const now = Date.now()
+
+  if (curSteps > prevPolledSteps) {
+    lastActivityAt = now
+    if (unsyncedSince === null && curSteps > lastSyncedSteps) {
+      unsyncedSince = now
+    }
+  }
+  prevPolledSteps = curSteps
+
+  if (curSteps > lastSyncedSteps && now >= nextAllowedSyncAt) {
+    if (unsyncedSince === null) unsyncedSince = now
+    const idleReady = now - lastActivityAt >= IDLE_SYNC_MS
+    const maxReady = now - unsyncedSince >= MAX_UNSYNCED_MS
+
+    if (idleReady || maxReady) {
+      const ok = runSyncAndVerify(idleReady ? '3m idle after new steps' : '15m periodic checkpoint')
+      if (ok) {
+        lastSyncedSteps = getLocalProjectTotalSteps()
+        prevPolledSteps = lastSyncedSteps
+        unsyncedSince = null
+      } else {
+        nextAllowedSyncAt = Date.now() + RETRY_BACKOFF_MS
+      }
+    }
+  }
 }
 
-// Wait briefly for SQLite WAL & final summary flush to settle
+// 3. Final sync on Antigravity exit (only if new steps happened since the last auto-sync!)
 await Bun.sleep(1000)
-
-// 3. Auto-sync conversations back to GitHub
-console.log(`\n⬆️ [3/3] Antigravity closed! Auto-syncing "${config.projectDisplayName}" conversations to GitHub...`)
-const syncRes = spawnSync(process.execPath, ['run', join(import.meta.dir, 'sync.ts')], {
-  cwd: REPO_ROOT,
-  stdio: 'inherit',
-})
-if (syncRes.status === 0) {
-  spawnSync(process.execPath, ['run', join(import.meta.dir, 'verify.ts')], {
-    cwd: REPO_ROOT,
-    stdio: 'inherit',
-  })
+const finalSteps = getLocalProjectTotalSteps()
+if (finalSteps > lastSyncedSteps) {
+  runSyncAndVerify('Antigravity closed')
+} else {
+  console.log('\n✨ [3/3] Antigravity closed — all conversations were already auto-synced to GitHub!')
 }
 console.log('✅ All done! Have a great day.')

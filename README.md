@@ -16,7 +16,7 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 - 💾 **SQLite WAL-Safe Sync, `--wait` Restore & `doctor`:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)`, cleans orphan split chunks, supports `bun run restore --wait` (auto-finalizes the instant Antigravity closes), and provides `bun run status` / `bun run doctor` health diagnostics.
 - 🔒 **Protobuf-Safe Secret Redaction & Multi-Part Audit:** Scrubs Jira, Postman (`PMAK-...`), GitHub, Google, Slack, Stripe, OpenAI/Anthropic, AWS, Private Keys, DB URLs with passwords, and JWTs using **Same-Byte-Length Redaction + `VACUUM`**, and `bun run verify` reassembles & scans multi-part `.gz.partNN` archives before push.
 - 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
-- 🤖 **1-Click Desktop Launcher (`bun run shortcut`):** Generates a native Desktop shortcut with the Antigravity icon that automatically pulls latest chats before opening Antigravity and auto-syncs your work to GitHub the moment you close Antigravity!
+- 🤖 **1-Click Desktop Launcher (`bun run shortcut`):** Generates a native Desktop shortcut with the Antigravity icon that pulls latest chats before opening Antigravity, **auto-syncs in the background** (after 3 min idle or every 15 min of active work — safe against sudden PC shutdowns!), and syncs any final steps on exit!
 - 📄 **Zero-Terminal Playbooks:** Also includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
 
 ---
