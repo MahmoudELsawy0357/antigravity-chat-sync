@@ -108,7 +108,7 @@ describe('archive full-text search, project registry & native Antigravity plugin
 
       const skillMdPath = join(installedDir, 'skills', 'chat-sync', 'SKILL.md')
       expect(existsSync(skillMdPath)).toBe(true)
-      const skillContent = readFileSync(skillMdPath, 'utf8')
+      const skillContent = readFileSync(skillMdPath, 'utf8').replace(/\r\n/g, '\n')
       expect(skillContent.startsWith('---\nname: chat-sync\n')).toBe(true)
 
       expect(uninstallGlobalPlugin()).toBe(true)
