@@ -217,10 +217,31 @@ describe('multi-agent adapters (Claude Code, Codex, Cursor) & cross-agent handof
         claudeDir: claudeHome,
       })
       expect(claudeRes.sessionId).toBeDefined()
-      expect(existsSync(claudeRes.location)).toBe(true)
-      expect(readFileSync(claudeRes.location, 'utf8')).toContain('GRNs Lightbox & Pagination Fix')
+      expect(existsSync(join(claudeRes.location, `${claudeRes.sessionId}.jsonl`))).toBe(true)
+      expect(readFileSync(join(claudeRes.location, `${claudeRes.sessionId}.jsonl`), 'utf8')).toContain('GRNs Lightbox & Pagination Fix')
 
-      // 2. Handoff -> Codex
+      // 2. Handoff -> Codex (syncs ALL archived conversations idempotently!)
+      const convDir2 = join(archiveDir, 'conversations', '01-2026-10-25-base-plan')
+      mkdirSync(convDir2, { recursive: true })
+      writeFileSync(
+        join(convDir2, 'conversation.md'),
+        [
+          '# 01. Creating Base Version Plan',
+          '',
+          '- **معرّف المحادثة (Conversation ID):** `d966dbb4-5635-4a33-8bce-78209e3abd30`',
+          '- **آخر تحديث:** `2026-10-25 13:04:45`',
+          '',
+          '---',
+          '',
+          '### 👤 محمود (رسالة #1)',
+          'عاوز بلان لمشروع الثابت',
+          '',
+          '### 🤖 المساعد (رد #2)',
+          'تم تجهيز الخطة الأساسية للمشروع.',
+        ].join('\n'),
+        'utf8',
+      )
+
       const codexRes = await executeHandoff({
         archiveRoot: archiveDir,
         projectSlug: 'althabit-dashboard',
@@ -228,9 +249,21 @@ describe('multi-agent adapters (Claude Code, Codex, Cursor) & cross-agent handof
         targetAgent: 'codex',
         codexDir: codexHome,
       })
-      expect(codexRes.sessionId).toBeDefined()
-      expect(existsSync(codexRes.location)).toBe(true)
-      expect(readFileSync(join(codexHome, 'session_index.jsonl'), 'utf8')).toContain('[Handoff] GRNs Lightbox & Pagination Fix')
+      expect(codexRes.syncedCount).toBe(2)
+      const codexIndex = readFileSync(join(codexHome, 'session_index.jsonl'), 'utf8')
+      expect(codexIndex).toContain('Creating Base Version Plan')
+      expect(codexIndex).toContain('GRNs Lightbox & Pagination Fix')
+
+      // Running handoff a second time is 100% idempotent (still 2 entries, zero duplicates!)
+      const codexResAgain = await executeHandoff({
+        archiveRoot: archiveDir,
+        projectSlug: 'althabit-dashboard',
+        workspacePath: wsDir,
+        targetAgent: 'codex',
+        codexDir: codexHome,
+      })
+      expect(codexResAgain.syncedCount).toBe(2)
+      expect(readFileSync(join(codexHome, 'session_index.jsonl'), 'utf8').trim().split('\n').length).toBe(2)
 
       // 3. Handoff -> Cursor (verifying .git/info/exclude protection!)
       const cursorRes = await executeHandoff({

@@ -1,27 +1,9 @@
 import { Database } from 'bun:sqlite'
-import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { redactText } from './redact'
-
-/**
- * Generates an RFC 9562 monotonic time-ordered UUIDv7 (`019...`) required by Codex's Rust thread engine.
- */
-export function generateUuidV7(nowMs = Date.now()): string {
-  const bytes = randomBytes(16)
-  const ts = BigInt(nowMs)
-  bytes[0] = Number((ts >> 40n) & 0xffn)
-  bytes[1] = Number((ts >> 32n) & 0xffn)
-  bytes[2] = Number((ts >> 24n) & 0xffn)
-  bytes[3] = Number((ts >> 16n) & 0xffn)
-  bytes[4] = Number((ts >> 8n) & 0xffn)
-  bytes[5] = Number(ts & 0xffn)
-  bytes[6] = (bytes[6] & 0x0f) | 0x70 // version 7
-  bytes[8] = (bytes[8] & 0x3f) | 0x80 // RFC 4122/9562 variant
-  const hex = bytes.toString('hex')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
-}
 
 export type AgentKind = 'antigravity' | 'claude' | 'codex' | 'cursor'
 export type ExternalAgentKind = Exclude<AgentKind, 'antigravity'>
@@ -32,6 +14,8 @@ export const AGENT_LABELS: Record<AgentKind, string> = {
   codex: 'Codex',
   cursor: 'Cursor',
 }
+
+const MIRROR_MARKER = '[antigravity-chat-sync-mirror:'
 
 export interface NormalizedTurn {
   role: 'user' | 'assistant'
@@ -50,6 +34,41 @@ export interface ExternalAgentSession {
   turns: NormalizedTurn[]
   rawFormat: 'claude-jsonl' | 'codex-jsonl' | 'cursor-json'
   rawPayload: string
+}
+
+export function generateUuidV7(nowMs = Date.now()): string {
+  const bytes = randomBytes(16)
+  const ts = BigInt(nowMs)
+  bytes[0] = Number((ts >> 40n) & 0xffn)
+  bytes[1] = Number((ts >> 32n) & 0xffn)
+  bytes[2] = Number((ts >> 24n) & 0xffn)
+  bytes[3] = Number((ts >> 16n) & 0xffn)
+  bytes[4] = Number((ts >> 8n) & 0xffn)
+  bytes[5] = Number(ts & 0xffn)
+  bytes[6] = (bytes[6] & 0x0f) | 0x70
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+/**
+ * Deterministic RFC 9562 UUIDv7 derived from `(targetAgent, sourceConversationId)` so
+ * re-syncing all conversations updates existing threads in-place with zero duplicates.
+ */
+export function deriveDeterministicUuidV7(seedKey: string, fixedEpochMs = 1760000000000): string {
+  const digest = createHash('sha256').update(`antigravity-chat-sync:${seedKey}`).digest()
+  const bytes = Buffer.from(digest.subarray(0, 16))
+  const ts = BigInt(fixedEpochMs)
+  bytes[0] = Number((ts >> 40n) & 0xffn)
+  bytes[1] = Number((ts >> 32n) & 0xffn)
+  bytes[2] = Number((ts >> 24n) & 0xffn)
+  bytes[3] = Number((ts >> 16n) & 0xffn)
+  bytes[4] = Number((ts >> 8n) & 0xffn)
+  bytes[5] = Number(ts & 0xffn)
+  bytes[6] = (bytes[6] & 0x0f) | 0x70
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
 export function getClaudeDir(): string {
@@ -104,6 +123,13 @@ function deriveTitleFromTurns(turns: NormalizedTurn[], fallback: string): string
   return firstLine.length > 72 ? `${firstLine.slice(0, 69)}...` : firstLine
 }
 
+function parseMirrorSeededLines(text: string): number | null {
+  const idx = text.indexOf(MIRROR_MARKER)
+  if (idx === -1) return null
+  const match = text.slice(idx).match(/\[antigravity-chat-sync-mirror:(\d+)\]/)
+  return match ? Number(match[1]) : 0
+}
+
 // ── 1. Claude Code Adapter (~/.claude/projects/<encoded-ws>/<id>.jsonl) ──────
 
 function extractClaudeContentText(content: unknown): { text: string; tools: string[] } {
@@ -151,6 +177,10 @@ export function collectClaudeSessions(opts: {
       const lines = rawText.split(/\r?\n/).filter(Boolean)
       if (lines.length === 0) continue
 
+      // Skip unmodified mirrored sessions unless the user added new turns in Claude Code
+      const seededLines = parseMirrorSeededLines(lines[0])
+      if (seededLines !== null && lines.length <= seededLines) continue
+
       let sessionId = file.replace(/\.jsonl$/, '')
       let cwd: string | undefined
       let summaryTitle = ''
@@ -164,7 +194,7 @@ export function collectClaudeSessions(opts: {
           if (obj.cwd && typeof obj.cwd === 'string') cwd = obj.cwd
           if (obj.timestamp && typeof obj.timestamp === 'string') lastTimestamp = obj.timestamp
           if (obj.type === 'summary' && typeof obj.summary === 'string' && obj.summary.trim()) {
-            summaryTitle = obj.summary.trim()
+            summaryTitle = obj.summary.replace(/\s*\[antigravity-chat-sync-mirror:\d+\]/g, '').trim()
           } else if (obj.type === 'user' || obj.type === 'assistant') {
             const msg = obj.message || obj
             const { text, tools } = extractClaudeContentText(msg.content)
@@ -288,6 +318,10 @@ export function collectCodexSessions(opts: {
     const lines = rawText.split(/\r?\n/).filter(Boolean)
     if (lines.length === 0) continue
 
+    // Skip unmodified mirrored sessions unless the user continued chatting inside Codex
+    const seededLines = parseMirrorSeededLines(lines[0])
+    if (seededLines !== null && lines.length <= seededLines) continue
+
     let sessionId = ''
     let cwd: string | undefined
     let lastTimestamp = ''
@@ -362,54 +396,16 @@ export function restoreCodexSession(
     if (existingCount >= session.stepCount) return false
   }
 
-  const dateObj = new Date(session.updatedAt || Date.now())
-  const yyyy = String(dateObj.getUTCFullYear())
-  const mm = String(dateObj.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(dateObj.getUTCDate()).padStart(2, '0')
-  const dayDir = join(sessionsRoot, yyyy, mm, dd)
-  mkdirSync(dayDir, { recursive: true })
-
-  const targetFile =
-    existingFiles[0] ||
-    join(dayDir, `rollout-${yyyy}-${mm}-${dd}T00-00-00-${session.id}.jsonl`)
-
-  const resolvedWs = resolve(targetWorkspacePath)
-  const rewrittenLines = session.rawPayload
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        const obj = JSON.parse(line)
-        if (obj.type === 'session_meta' && obj.payload) {
-          obj.payload.cwd = resolvedWs
-        }
-        return JSON.stringify(obj)
-      } catch {
-        return line
-      }
-    })
-
-  writeFileSync(targetFile, rewrittenLines.join('\n') + '\n', 'utf8')
-
-  // Upsert into session_index.jsonl
-  const indexFile = join(codexDir, 'session_index.jsonl')
-  const indexLines = existsSync(indexFile) ? readFileSync(indexFile, 'utf8').split(/\r?\n/).filter(Boolean) : []
-  const filtered = indexLines.filter((l) => {
-    try {
-      return JSON.parse(l).id !== session.id
-    } catch {
-      return true
-    }
+  seedCodexConversation({
+    sourceId: session.id,
+    preserveExactSessionId: true,
+    workspacePath: targetWorkspacePath,
+    title: session.title,
+    updatedAt: session.updatedAt,
+    turns: session.turns,
+    codexDir,
+    isMirror: false,
   })
-  filtered.push(
-    JSON.stringify({
-      id: session.id,
-      thread_name: session.title,
-      updated_at: session.updatedAt,
-    }),
-  )
-  mkdirSync(codexDir, { recursive: true })
-  writeFileSync(indexFile, filtered.join('\n') + '\n', 'utf8')
   return true
 }
 
@@ -466,7 +462,6 @@ export function collectCursorSessions(opts: {
           const valStr = typeof row.value === 'string' ? row.value : Buffer.from(row.value).toString('utf8')
           const parsed = JSON.parse(valStr)
 
-          // Classic Cursor Chat Tabs
           if (row.key === 'workbench.panel.aichat.view.aichat.chatdata' && Array.isArray(parsed?.tabs)) {
             for (const tab of parsed.tabs) {
               const id = String(tab.tabId || '')
@@ -499,14 +494,12 @@ export function collectCursorSessions(opts: {
             }
           }
 
-          // Cursor Composer / Agent Threads
           if (row.key === 'composer.composerData' && Array.isArray(parsed?.allComposers)) {
             for (const comp of parsed.allComposers) {
               const id = String(comp.composerId || '')
               if (!id || excluded.has(id)) continue
               let conversation = Array.isArray(comp.conversation) ? comp.conversation : []
 
-              // Check globalStorage cursorDiskKV if composer conversation is stored externally
               if (conversation.length === 0 && globalDb) {
                 try {
                   const gRow = globalDb
@@ -617,7 +610,6 @@ export function writeExternalSessionMarkdown(opts: {
     return { turnsCount: session.turns.length }
   }
 
-  // Paginate large external transcripts just like Antigravity transcripts
   const parts: string[] = []
   let current = ''
   for (const b of blocks) {
@@ -646,76 +638,151 @@ export function writeExternalSessionMarkdown(opts: {
   return { turnsCount: session.turns.length }
 }
 
-// ── 5. Seed New Session Files for Cross-Agent Handoff ────────────────────────
+// ── 5. Multi-Turn Cross-Agent Conversation Materializers (Idempotent!) ───────
 
-export function createSeededClaudeSession(opts: {
+function pairTurnsForChatBubbles(turns: NormalizedTurn[]): Array<{ user: string; assistant: string }> {
+  const pairs: Array<{ user: string; assistant: string }> = []
+  let pendingUser = ''
+
+  for (const t of turns) {
+    const clean = t.text.trim()
+    if (!clean) continue
+    if (t.role === 'user') {
+      if (pendingUser) {
+        pendingUser += `\n\n${clean}`
+      } else {
+        pendingUser = clean
+      }
+    } else {
+      if (pendingUser) {
+        pairs.push({ user: pendingUser, assistant: clean })
+        pendingUser = ''
+      } else if (pairs.length > 0) {
+        pairs[pairs.length - 1].assistant += `\n\n${clean}`
+      } else {
+        pairs.push({ user: '(Continued session)', assistant: clean })
+      }
+    }
+  }
+
+  if (pendingUser) {
+    pairs.push({ user: pendingUser, assistant: 'Ready to continue.' })
+  }
+  return pairs
+}
+
+export function seedClaudeConversation(opts: {
+  sourceId: string
   workspacePath: string
   title: string
-  handoffBrief: string
-  ackText: string
+  updatedAt: string
+  turns: NormalizedTurn[]
   claudeDir?: string
-}): { sessionId: string; filePath: string } {
-  const sessionId = randomUUID()
-  const now = new Date().toISOString()
+}): { sessionId: string; filePath: string; turnPairs: number } {
+  const parsedDate = new Date(opts.updatedAt.includes('T') ? opts.updatedAt : `${opts.updatedAt.replace(' ', 'T')}Z`)
+  const updatedMs = Number.isNaN(parsedDate.getTime()) ? Date.now() : parsedDate.getTime()
+  const iso = new Date(updatedMs).toISOString()
+
+  const sessionId = deriveDeterministicUuidV7(`claude:${opts.sourceId}`)
   const resolvedWs = resolve(opts.workspacePath)
   const destDir = join(opts.claudeDir || getClaudeDir(), 'projects', encodeClaudeProjectDirName(resolvedWs))
   mkdirSync(destDir, { recursive: true })
 
-  const userUuid = randomUUID()
-  const asstUuid = randomUUID()
-  const lines = [
-    JSON.stringify({ type: 'summary', summary: opts.title, leafUuid: asstUuid }),
+  const pairs = pairTurnsForChatBubbles(opts.turns)
+  const totalLines = 1 + pairs.length * 2
+  const lines: string[] = []
+
+  let prevUuid: string | null = null
+  const msgEntries: string[] = []
+  pairs.forEach((pair, idx) => {
+    const uId = deriveDeterministicUuidV7(`claude:${opts.sourceId}:u:${idx}`)
+    const aId = deriveDeterministicUuidV7(`claude:${opts.sourceId}:a:${idx}`)
+    const stepIso = new Date(updatedMs - (pairs.length - idx) * 1000).toISOString()
+
+    msgEntries.push(
+      JSON.stringify({
+        parentUuid: prevUuid,
+        isSidechain: false,
+        userType: 'external',
+        cwd: resolvedWs,
+        sessionId,
+        type: 'user',
+        message: { role: 'user', content: pair.user },
+        uuid: uId,
+        timestamp: stepIso,
+      }),
+    )
+    msgEntries.push(
+      JSON.stringify({
+        parentUuid: uId,
+        isSidechain: false,
+        userType: 'external',
+        cwd: resolvedWs,
+        sessionId,
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: pair.assistant }] },
+        uuid: aId,
+        timestamp: stepIso,
+      }),
+    )
+    prevUuid = aId
+  })
+
+  lines.push(
     JSON.stringify({
-      parentUuid: null,
-      isSidechain: false,
-      userType: 'external',
-      cwd: resolvedWs,
-      sessionId,
-      type: 'user',
-      message: { role: 'user', content: opts.handoffBrief },
-      uuid: userUuid,
-      timestamp: now,
+      type: 'summary',
+      summary: `${opts.title} ${MIRROR_MARKER}${totalLines}]`,
+      leafUuid: prevUuid,
+      timestamp: iso,
     }),
-    JSON.stringify({
-      parentUuid: userUuid,
-      isSidechain: false,
-      userType: 'external',
-      cwd: resolvedWs,
-      sessionId,
-      type: 'assistant',
-      message: { role: 'assistant', content: [{ type: 'text', text: opts.ackText }] },
-      uuid: asstUuid,
-      timestamp: now,
-    }),
-  ]
+    ...msgEntries,
+  )
 
   const filePath = join(destDir, `${sessionId}.jsonl`)
   writeFileSync(filePath, lines.join('\n') + '\n', 'utf8')
-  return { sessionId, filePath }
+  return { sessionId, filePath, turnPairs: pairs.length }
 }
 
-export function createSeededCodexSession(opts: {
+export function seedCodexConversation(opts: {
+  sourceId: string
+  preserveExactSessionId?: boolean
   workspacePath: string
   title: string
-  handoffBrief: string
-  ackText: string
+  updatedAt: string
+  turns: NormalizedTurn[]
   codexDir?: string
-}): { sessionId: string; filePath: string } {
-  const now = new Date()
-  const nowMs = now.getTime()
-  const nowSec = Math.floor(nowMs / 1000)
-  const sessionId = generateUuidV7(nowMs)
-  const turnId = generateUuidV7(nowMs + 1)
-  const iso = now.toISOString()
-  const yyyy = String(now.getUTCFullYear())
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(now.getUTCDate()).padStart(2, '0')
-  const hh = String(now.getUTCHours()).padStart(2, '0')
-  const mi = String(now.getUTCMinutes()).padStart(2, '0')
-  const ss = String(now.getUTCSeconds()).padStart(2, '0')
+  isMirror?: boolean
+}): { sessionId: string; filePath: string; turnPairs: number } {
+  const parsedDate = new Date(opts.updatedAt.includes('T') ? opts.updatedAt : `${opts.updatedAt.replace(' ', 'T')}Z`)
+  const updatedMs = Number.isNaN(parsedDate.getTime()) ? Date.now() : parsedDate.getTime()
+  const updatedSec = Math.floor(updatedMs / 1000)
+  const dateObj = new Date(updatedMs)
+  const iso = dateObj.toISOString()
+
+  const sessionId = opts.preserveExactSessionId
+    ? opts.sourceId
+    : deriveDeterministicUuidV7(`codex:${opts.sourceId}`)
+  const isMirror = opts.isMirror !== false
+
+  const yyyy = String(dateObj.getUTCFullYear())
+  const mm = String(dateObj.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dateObj.getUTCDate()).padStart(2, '0')
+  const hh = String(dateObj.getUTCHours()).padStart(2, '0')
+  const mi = String(dateObj.getUTCMinutes()).padStart(2, '0')
+  const ss = String(dateObj.getUTCSeconds()).padStart(2, '0')
 
   const root = opts.codexDir || getCodexDir()
-  const dayDir = join(root, 'sessions', yyyy, mm, dd)
+  const sessionsRoot = join(root, 'sessions')
+  // Remove any older rollout file with the same deterministic sessionId so path stays clean
+  for (const oldFile of collectJsonlRecursive(sessionsRoot)) {
+    if (oldFile.includes(sessionId)) {
+      try {
+        rmSync(oldFile, { force: true })
+      } catch {}
+    }
+  }
+
+  const dayDir = join(sessionsRoot, yyyy, mm, dd)
   mkdirSync(dayDir, { recursive: true })
 
   const resolvedWs = resolve(opts.workspacePath)
@@ -729,6 +796,12 @@ export function createSeededCodexSession(opts: {
       : resolvedWs
 
   const filePath = join(dayDir, `rollout-${yyyy}-${mm}-${dd}T${hh}-${mi}-${ss}-${sessionId}.jsonl`)
+  const pairs = pairTurnsForChatBubbles(opts.turns)
+  const totalLines = 1 + pairs.length * 6
+
+  const baseInstrText = isMirror
+    ? `You are Codex, a pragmatic software engineering agent collaborating with the user in their workspace. ${MIRROR_MARKER}${totalLines}]`
+    : 'You are Codex, a pragmatic software engineering agent collaborating with the user in their workspace.'
 
   const line0 = JSON.stringify({
     timestamp: iso,
@@ -743,102 +816,138 @@ export function createSeededCodexSession(opts: {
       cli_version: '0.104.0-alpha.1',
       source: 'vscode',
       model_provider: 'openai',
-      base_instructions: {
-        text: 'You are Codex, a pragmatic software engineering agent collaborating with the user in their workspace.',
-      },
+      base_instructions: { text: baseInstrText },
       history_mode: 'paginated',
     },
   })
 
-  const turnLines = [
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 1,
-      type: 'event_msg',
-      payload: {
-        type: 'task_started',
-        turn_id: turnId,
-        model_context_window: 258400,
-        collaboration_mode_kind: 'default',
-      },
-    }),
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 2,
-      type: 'response_item',
-      payload: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: opts.handoffBrief }],
-      },
-    }),
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 3,
-      type: 'event_msg',
-      payload: {
-        type: 'item_completed',
-        thread_id: sessionId,
-        turn_id: turnId,
-        item: {
-          type: 'UserMessage',
-          id: 'item-1',
-          content: [{ type: 'text', text: opts.handoffBrief }],
-        },
-      },
-    }),
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 4,
-      type: 'event_msg',
-      payload: {
-        type: 'item_completed',
-        thread_id: sessionId,
-        turn_id: turnId,
-        item: {
-          type: 'AgentMessage',
-          id: 'item-2',
-          content: [{ type: 'Text', text: opts.ackText }],
-        },
-        completed_at_ms: nowMs,
-      },
-    }),
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 5,
-      type: 'response_item',
-      payload: {
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'output_text', text: opts.ackText }],
-      },
-    }),
-    JSON.stringify({
-      timestamp: iso,
-      ordinal: 6,
-      type: 'event_msg',
-      payload: {
-        type: 'task_complete',
-        turn_id: turnId,
-        last_agent_message: opts.ackText,
-      },
-    }),
-  ]
+  const rolloutChunks: string[] = [line0 + '\n']
+  let byteCursor = Buffer.byteLength(rolloutChunks[0], 'utf8')
+  let ordinalCursor = 1
 
-  const turnByteOffset = Buffer.byteLength(line0 + '\n', 'utf8')
-  const fullContent = [line0, ...turnLines].join('\n') + '\n'
-  const totalBytes = Buffer.byteLength(fullContent, 'utf8')
-  writeFileSync(filePath, fullContent, 'utf8')
+  interface TurnDbRecord {
+    turnId: string
+    startOrdinal: number
+    endOrdinal: number
+    startByte: number
+    endByte: number
+    userItemId: string
+    agentItemId: string
+    userItemOrdinal: number
+    agentItemOrdinal: number
+    userText: string
+    agentText: string
+    turnMs: number
+  }
+  const dbTurns: TurnDbRecord[] = []
 
-  // 1. Upsert into session_index.jsonl (for Codex CLI)
+  pairs.forEach((pair, idx) => {
+    const turnMs = updatedMs - (pairs.length - 1 - idx) * 1000
+    const turnIso = new Date(turnMs).toISOString()
+    const turnId = deriveDeterministicUuidV7(`codex:${opts.sourceId}:turn:${idx}`, turnMs)
+    const userItemId = `item-${idx * 2 + 1}`
+    const agentItemId = `item-${idx * 2 + 2}`
+
+    const startOrdinal = ordinalCursor
+    const startByte = byteCursor
+
+    const oTaskStart = ordinalCursor++
+    const oRespUser = ordinalCursor++
+    const oItemUser = ordinalCursor++
+    const oItemAgent = ordinalCursor++
+    const oRespAgent = ordinalCursor++
+    const oTaskDone = ordinalCursor++
+
+    const chunkStr =
+      [
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oTaskStart,
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: turnId, model_context_window: 258400, collaboration_mode_kind: 'default' },
+        }),
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oRespUser,
+          type: 'response_item',
+          payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: pair.user }] },
+        }),
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oItemUser,
+          type: 'event_msg',
+          payload: {
+            type: 'item_completed',
+            thread_id: sessionId,
+            turn_id: turnId,
+            item: { type: 'UserMessage', id: userItemId, content: [{ type: 'text', text: pair.user }] },
+          },
+        }),
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oItemAgent,
+          type: 'event_msg',
+          payload: {
+            type: 'item_completed',
+            thread_id: sessionId,
+            turn_id: turnId,
+            item: { type: 'AgentMessage', id: agentItemId, content: [{ type: 'Text', text: pair.assistant }] },
+            completed_at_ms: turnMs,
+          },
+        }),
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oRespAgent,
+          type: 'response_item',
+          payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: pair.assistant }] },
+        }),
+        JSON.stringify({
+          timestamp: turnIso,
+          ordinal: oTaskDone,
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: turnId, last_agent_message: pair.assistant },
+        }),
+      ].join('\n') + '\n'
+
+    rolloutChunks.push(chunkStr)
+    byteCursor += Buffer.byteLength(chunkStr, 'utf8')
+
+    dbTurns.push({
+      turnId,
+      startOrdinal,
+      endOrdinal: oTaskDone,
+      startByte,
+      endByte: byteCursor,
+      userItemId,
+      agentItemId,
+      userItemOrdinal: oItemUser,
+      agentItemOrdinal: oItemAgent,
+      userText: pair.user,
+      agentText: pair.assistant,
+      turnMs,
+    })
+  })
+
+  writeFileSync(filePath, rolloutChunks.join(''), 'utf8')
+
+  // 1. Upsert into session_index.jsonl
   const indexFile = join(root, 'session_index.jsonl')
-  const existing = existsSync(indexFile) ? readFileSync(indexFile, 'utf8').trimEnd() : ''
-  const entry = JSON.stringify({ id: sessionId, thread_name: opts.title, updated_at: iso })
-  writeFileSync(indexFile, (existing ? `${existing}\n${entry}` : entry) + '\n', 'utf8')
+  const indexLines = existsSync(indexFile) ? readFileSync(indexFile, 'utf8').split(/\r?\n/).filter(Boolean) : []
+  const filteredIndex = indexLines.filter(l => {
+    try {
+      return JSON.parse(l).id !== sessionId
+    } catch {
+      return true
+    }
+  })
+  filteredIndex.push(JSON.stringify({ id: sessionId, thread_name: opts.title, updated_at: iso }))
+  mkdirSync(root, { recursive: true })
+  writeFileSync(indexFile, filteredIndex.join('\n') + '\n', 'utf8')
 
-  // 2. Upsert into Codex VS Code SQLite state_*.sqlite (threads sidebar list)
+  // 2. Upsert into Codex VS Code state_*.sqlite (threads sidebar list)
   try {
     const stateFiles = readdirSync(root).filter(f => /^state_\d+\.sqlite$/.test(f)).sort()
+    const firstMsg = pairs[0]?.user || opts.title
     for (const sf of stateFiles) {
       const sdb = new Database(join(root, sf))
       sdb.exec('PRAGMA busy_timeout = 5000;')
@@ -847,8 +956,8 @@ export function createSeededCodexSession(opts: {
         const colValues: Record<string, any> = {
           id: sessionId,
           rollout_path: filePath,
-          created_at: nowSec,
-          updated_at: nowSec,
+          created_at: updatedSec,
+          updated_at: updatedSec,
           source: 'vscode',
           model_provider: 'openai',
           cwd: sqliteCwd,
@@ -859,13 +968,13 @@ export function createSeededCodexSession(opts: {
           has_user_event: 1,
           archived: 0,
           cli_version: '0.104.0-alpha.1',
-          first_user_message: opts.handoffBrief,
+          first_user_message: firstMsg.slice(0, 2000),
           memory_mode: 'enabled',
-          created_at_ms: nowMs,
-          updated_at_ms: nowMs,
+          created_at_ms: updatedMs,
+          updated_at_ms: updatedMs,
           preview: opts.title,
-          recency_at: nowSec,
-          recency_at_ms: nowMs,
+          recency_at: updatedSec,
+          recency_at_ms: updatedMs,
           history_mode: 'paginated',
           name: opts.title,
           is_pinned: 0,
@@ -881,7 +990,7 @@ export function createSeededCodexSession(opts: {
     }
   } catch {}
 
-  // 3. Upsert into Codex VS Code thread_history_*.sqlite (paginated turn & message items)
+  // 3. Upsert all turns & bubbles into Codex VS Code thread_history_*.sqlite
   try {
     const histFiles = readdirSync(root).filter(f => /^thread_history_\d+\.sqlite$/.test(f)).sort()
     for (const hf of histFiles) {
@@ -891,58 +1000,131 @@ export function createSeededCodexSession(opts: {
         (hdb.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(t => t.name),
       )
       if (tables.has('thread_turns') && tables.has('thread_items')) {
-        hdb
-          .query(
-            `INSERT OR REPLACE INTO thread_turns (
+        hdb.transaction(() => {
+          hdb.query('DELETE FROM thread_items WHERE thread_id = ?').run(sessionId)
+          hdb.query('DELETE FROM thread_turns WHERE thread_id = ?').run(sessionId)
+
+          const insertTurn = hdb.prepare(
+            `INSERT INTO thread_turns (
               thread_id, turn_id, rollout_ordinal, status, first_user_item_id, final_agent_item_id,
               rollout_byte_offset, rollout_end_ordinal, rollout_end_byte_offset
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(sessionId, turnId, 1, 'completed', 'item-1', 'item-2', turnByteOffset, 6, totalBytes)
-
-        const userItemJson = JSON.stringify({
-          type: 'userMessage',
-          id: 'item-1',
-          clientId: null,
-          content: [{ type: 'text', text: opts.handoffBrief, text_elements: [] }],
-        })
-        const agentItemJson = JSON.stringify({
-          type: 'agentMessage',
-          id: 'item-2',
-          text: opts.ackText,
-          phase: null,
-          memoryCitation: null,
-          delivery: null,
-          questions: null,
-        })
-
-        hdb
-          .query(
-            `INSERT OR REPLACE INTO thread_items (
+          const insertItem = hdb.prepare(
+            `INSERT INTO thread_items (
               thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type, updated_at_ordinal, completed_at_ms
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(sessionId, turnId, 'item-1', 3, nowMs, userItemJson, 'userMessage', 3, nowMs)
 
-        hdb
-          .query(
-            `INSERT OR REPLACE INTO thread_items (
-              thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type, updated_at_ordinal, completed_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(sessionId, turnId, 'item-2', 4, nowMs + 1, agentItemJson, 'agentMessage', 4, nowMs + 1)
-
-        if (tables.has('thread_history_projection_state')) {
-          hdb
-            .query(
-              'INSERT OR REPLACE INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, ?, ?)',
+          for (const dt of dbTurns) {
+            insertTurn.run(
+              sessionId,
+              dt.turnId,
+              dt.startOrdinal,
+              'completed',
+              dt.userItemId,
+              dt.agentItemId,
+              dt.startByte,
+              dt.endOrdinal,
+              dt.endByte,
             )
-            .run(sessionId, totalBytes, 7)
-        }
+
+            const uJson = JSON.stringify({
+              type: 'userMessage',
+              id: dt.userItemId,
+              clientId: null,
+              content: [{ type: 'text', text: dt.userText, text_elements: [] }],
+            })
+            const aJson = JSON.stringify({
+              type: 'agentMessage',
+              id: dt.agentItemId,
+              text: dt.agentText,
+              phase: null,
+              memoryCitation: null,
+              delivery: null,
+              questions: null,
+            })
+
+            insertItem.run(
+              sessionId,
+              dt.turnId,
+              dt.userItemId,
+              dt.userItemOrdinal,
+              dt.turnMs,
+              uJson,
+              'userMessage',
+              dt.userItemOrdinal,
+              dt.turnMs,
+            )
+            insertItem.run(
+              sessionId,
+              dt.turnId,
+              dt.agentItemId,
+              dt.agentItemOrdinal,
+              dt.turnMs + 1,
+              aJson,
+              'agentMessage',
+              dt.agentItemOrdinal,
+              dt.turnMs + 1,
+            )
+          }
+
+          if (tables.has('thread_history_projection_state')) {
+            hdb
+              .query(
+                'INSERT OR REPLACE INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, ?, ?)',
+              )
+              .run(sessionId, byteCursor, ordinalCursor)
+          }
+
+          insertTurn.finalize()
+          insertItem.finalize()
+        })()
       }
       hdb.close()
     }
   } catch {}
 
-  return { sessionId, filePath }
+  return { sessionId, filePath, turnPairs: pairs.length }
+}
+
+// Legacy single-turn wrappers kept for API compatibility
+export function createSeededClaudeSession(opts: {
+  workspacePath: string
+  title: string
+  handoffBrief: string
+  ackText: string
+  claudeDir?: string
+}): { sessionId: string; filePath: string } {
+  return seedClaudeConversation({
+    sourceId: opts.title,
+    workspacePath: opts.workspacePath,
+    title: opts.title,
+    updatedAt: new Date().toISOString(),
+    turns: [
+      { role: 'user', text: opts.handoffBrief },
+      { role: 'assistant', text: opts.ackText },
+    ],
+    claudeDir: opts.claudeDir,
+  })
+}
+
+export function createSeededCodexSession(opts: {
+  workspacePath: string
+  title: string
+  handoffBrief: string
+  ackText: string
+  codexDir?: string
+}): { sessionId: string; filePath: string } {
+  return seedCodexConversation({
+    sourceId: opts.title,
+    workspacePath: opts.workspacePath,
+    title: opts.title,
+    updatedAt: new Date().toISOString(),
+    turns: [
+      { role: 'user', text: opts.handoffBrief },
+      { role: 'assistant', text: opts.ackText },
+    ],
+    codexDir: opts.codexDir,
+  })
 }
