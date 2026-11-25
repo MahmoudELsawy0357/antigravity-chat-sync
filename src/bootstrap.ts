@@ -254,7 +254,7 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
     : { status: 1 }
   const remoteRepoExists = repoCheck.status === 0
 
-  // Case A: Joining an existing archive repo from another machine (Two-Way Merge!)
+  // Case A: Joining or refreshing an existing archive repo from another machine (Two-Way Merge!)
   if (remoteRepoExists && !existsSync(join(targetDir, '.git'))) {
     console.log(`\nDetected existing remote archive "${archiveRepo}" on GitHub — cloning for two-way merge...`)
     mkdirSync(resolve(targetDir, '..'), { recursive: true })
@@ -262,6 +262,9 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
       spawnSync('git', ['config', '--global', 'http.sslBackend', 'schannel'], { windowsHide: true })
     }
     runStep('git', ['clone', `https://github.com/${archiveRepo}.git`, targetDir], process.cwd())
+  } else if (remoteRepoExists && existsSync(join(targetDir, '.git'))) {
+    console.log(`\nRefreshing existing local archive "${targetDir}" from GitHub...`)
+    runStep('git', ['pull', '--rebase', '--autostash'], targetDir)
   }
 
   mkdirSync(targetDir, { recursive: true })
