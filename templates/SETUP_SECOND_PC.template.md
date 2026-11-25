@@ -21,6 +21,7 @@
      bun run restore --workspace "<DASHBOARD_PATH>"
      bun run sync --exclude "<Current-Conversation-ID>"
      bun run status --workspace "<DASHBOARD_PATH>"
+     bun run autostart --workspace "<DASHBOARD_PATH>"
      bun run shortcut --workspace "<DASHBOARD_PATH>"
      ```
    - *(Note: `restore` automatically detects or creates `~/.gemini/config/projects/<uuid>.json`, rewrites cross-drive URIs, drops non-existent foreign workspaces, rewrites cross-user `brain/` artifact links, and restores `annotations/` + `chapter_titles/`.)*

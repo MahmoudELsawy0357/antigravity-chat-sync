@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import {
@@ -7,6 +9,7 @@ import {
   getActualConvDbStepCount,
   hasLocalProjectConfig,
   isLanguageServerRunning,
+  isPidAlive,
   parseProtoFields,
   toWorkspaceUris,
 } from './protobuf'
@@ -35,6 +38,42 @@ console.log(
   }`,
 )
 console.log(`⚙️ Antigravity LS   : ${lsRunning ? '🟡 Running (close before restore or use --wait)' : '🟢 Stopped (safe to restore)'}`)
+
+const safeSlug = config.projectSlug.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'project'
+let startupPath = ''
+if (process.platform === 'win32') {
+  const sq = spawnSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Startup')"], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  const sDir =
+    String(sq.stdout || '').trim() ||
+    join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+  startupPath = join(sDir, `antigravity-chatsync-${safeSlug}.vbs`)
+} else if (process.platform === 'darwin') {
+  startupPath = join(homedir(), 'Library', 'LaunchAgents', `com.antigravity.chatsync.${safeSlug}.plist`)
+} else {
+  startupPath = join(homedir(), '.config', 'autostart', `antigravity-chatsync-${safeSlug}.desktop`)
+}
+
+const lockPath = join(REPO_ROOT, '.daemon.lock')
+let daemonPid: number | null = null
+if (existsSync(lockPath)) {
+  try {
+    const info = JSON.parse(readFileSync(lockPath, 'utf8'))
+    if (info?.pid && isPidAlive(Number(info.pid))) daemonPid = Number(info.pid)
+  } catch {}
+}
+const startupEnabled = existsSync(startupPath)
+console.log(
+  `🤖 Auto-Sync Daemon : ${daemonPid ? `🟢 Running (PID ${daemonPid})` : '⚪ Stopped (run `bun run autostart`)'} | OS Autostart: ${startupEnabled ? '✅ Enabled' : '⚪ Not installed'}`,
+)
+const daemonLogPath = join(REPO_ROOT, '.daemon.log')
+if (existsSync(daemonLogPath)) {
+  const lines = readFileSync(daemonLogPath, 'utf8').trim().split('\n').filter(Boolean)
+  const lastSyncLine = [...lines].reverse().find(l => l.includes('Auto-sync succeeded') || l.includes('Daemon started'))
+  if (lastSyncLine) console.log(`🕒 Last Watcher Log : ${lastSyncLine}`)
+}
 
 const slugLower = config.projectSlug.toLowerCase()
 const legacyLowers = config.legacyProjectSlugs.map(s => s.toLowerCase()).filter(Boolean)

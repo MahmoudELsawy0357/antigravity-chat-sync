@@ -142,18 +142,44 @@ export function getActualConvDbStepCount(convDbPath: string): number {
   }
 }
 
+export function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err: any) {
+    return err?.code === 'EPERM'
+  }
+}
+
 export function isLanguageServerRunning(): boolean {
   try {
     if (process.platform === 'win32') {
-      const res = spawnSync(
-        'powershell',
-        ['-NoProfile', '-Command', "(Get-Process -Name 'language_server*' -ErrorAction SilentlyContinue).Count"],
-        { encoding: 'utf8' },
-      )
-      return Number(String(res.stdout || '0').trim()) > 0
+      const res = spawnSync('tasklist', ['/NH', '/FO', 'CSV'], { encoding: 'utf8', windowsHide: true })
+      return String(res.stdout || '').toLowerCase().includes('language_server')
     }
     const res = spawnSync('pgrep', ['-f', 'language_server'], { encoding: 'utf8' })
     return res.status === 0
+  } catch {
+    return false
+  }
+}
+
+export function isAntigravityRunning(): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const res = spawnSync('tasklist', ['/NH', '/FO', 'CSV'], { encoding: 'utf8', windowsHide: true })
+      const out = String(res.stdout || '').toLowerCase()
+      return out.includes('"antigravity.exe"') || out.includes('language_server')
+    }
+    if (process.platform === 'darwin') {
+      const ui = spawnSync('pgrep', ['-f', 'Antigravity.app'], { encoding: 'utf8' })
+      if (ui.status === 0) return true
+    } else {
+      const ui = spawnSync('pgrep', ['-f', 'antigravity'], { encoding: 'utf8' })
+      if (ui.status === 0) return true
+    }
+    return isLanguageServerRunning()
   } catch {
     return false
   }

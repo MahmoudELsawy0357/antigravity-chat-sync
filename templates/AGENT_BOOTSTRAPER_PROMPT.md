@@ -19,7 +19,8 @@ Steps to execute automatically:
    - `bun run verify` (audits single `.gz` and multi-part `.gz.partNN` archives for zero secret leaks & file-size limits)
    - `bun test` (verifies Protobuf remapping, secret redaction, and multi-part verification)
    - `bun run status` (confirms local Antigravity 2.x `project_id` health and synced conversation counts)
-   - `bun run shortcut` (creates a 1-click Desktop shortcut with the Antigravity icon that auto-restores on open and auto-syncs on close)
+   - `bun run autostart --workspace "<current-workspace-full-path>"` (installs & starts the silent OS login background watcher so 3m-idle / 15m-checkpoint / exit auto-sync always runs even if Antigravity is opened from its normal icon)
+   - `bun run shortcut --workspace "<current-workspace-full-path>"` (creates a 1-click Desktop shortcut with the Antigravity icon)
 5. Commit everything and create + push the private GitHub repository via:
    `gh repo create <YOUR_GITHUB_USERNAME>/<NEW_PRIVATE_REPO_NAME> --private --source=. --remote=origin --push`
 6. Confirm concisely to the user:

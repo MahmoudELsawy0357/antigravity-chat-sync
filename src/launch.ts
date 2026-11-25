@@ -1,15 +1,16 @@
 import { Database } from 'bun:sqlite'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
-import { getActualConvDbStepCount, isLanguageServerRunning } from './protobuf'
+import { getActualConvDbStepCount, isAntigravityRunning, isLanguageServerRunning } from './protobuf'
 
 const IDLE_SYNC_MS = 3 * 60 * 1000 // 3 minutes of quiet after new steps
 const MAX_UNSYNCED_MS = 15 * 60 * 1000 // Max 15 minutes during non-stop work
 const RETRY_BACKOFF_MS = 5 * 60 * 1000 // 5 minutes backoff if offline
 const POLL_INTERVAL_MS = 15 * 1000 // Check every 15s (local disk only, 0 network)
+const CLOSE_GRACE_MS = 12 * 1000 // Ignore transient Reload Window / Server Restart dips
 
 const config = loadConfig()
 const agyDir = getAntigravityDir()
@@ -129,14 +130,30 @@ const child = spawn(agyExe, launchArgs, {
 })
 child.unref()
 
-// Wait up to 25 seconds for language_server to spin up
-for (let i = 0; i < 50; i++) {
-  if (isLanguageServerRunning()) break
+function getArchivedProjectTotalSteps(): number {
+  const summariesPath = join(REPO_ROOT, 'antigravity-backup', 'summaries.json')
+  if (!existsSync(summariesPath)) return 0
+  try {
+    const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+    let total = 0
+    for (const s of summaries || []) {
+      if (excludedSet.has(s.conversation_id)) continue
+      total += s.step_count ?? 0
+    }
+    return total
+  } catch {
+    return 0
+  }
+}
+
+// Wait up to 35 seconds for Antigravity UI or language_server to spin up
+for (let i = 0; i < 70; i++) {
+  if (isAntigravityRunning()) break
   await Bun.sleep(500)
 }
 
-if (!isLanguageServerRunning()) {
-  console.warn('⚠️ Could not detect language_server startup; exiting launcher without auto-sync.')
+if (!isAntigravityRunning()) {
+  console.warn('⚠️ Could not detect Antigravity startup; exiting launcher without auto-sync.')
   process.exit(0)
 }
 
@@ -144,16 +161,19 @@ console.log(
   '🟢 Antigravity is open! Auto-sync runs after 3 min of idle (or every 15 min of active work), plus on exit.',
 )
 
-let lastSyncedSteps = getLocalProjectTotalSteps()
-let prevPolledSteps = lastSyncedSteps
+let lastSyncedSteps = getArchivedProjectTotalSteps()
+let prevPolledSteps = getLocalProjectTotalSteps()
 let lastActivityAt = Date.now()
-let unsyncedSince: number | null = null
+let unsyncedSince: number | null = prevPolledSteps > lastSyncedSteps ? Date.now() : null
 let nextAllowedSyncAt = 0
 
-// Watch while Antigravity is open: periodic smart auto-sync + exit detection
-while (isLanguageServerRunning()) {
+// Watch while Antigravity is open: reload-proof periodic smart auto-sync + exit detection
+while (true) {
   await Bun.sleep(POLL_INTERVAL_MS)
-  if (!isLanguageServerRunning()) break
+  if (!isAntigravityRunning()) {
+    await Bun.sleep(CLOSE_GRACE_MS)
+    if (!isAntigravityRunning()) break
+  }
 
   const curSteps = getLocalProjectTotalSteps()
   const now = Date.now()
@@ -174,7 +194,7 @@ while (isLanguageServerRunning()) {
     if (idleReady || maxReady) {
       const ok = runSyncAndVerify(idleReady ? '3m idle after new steps' : '15m periodic checkpoint')
       if (ok) {
-        lastSyncedSteps = getLocalProjectTotalSteps()
+        lastSyncedSteps = Math.max(getArchivedProjectTotalSteps(), getLocalProjectTotalSteps())
         prevPolledSteps = lastSyncedSteps
         unsyncedSince = null
       } else {
