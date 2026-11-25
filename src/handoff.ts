@@ -215,6 +215,11 @@ export async function executeHandoff(opts: {
   latestOnly?: boolean
   claudeDir?: string
   codexDir?: string
+  cursorUserDir?: string
+  vsCodeUserDir?: string
+  windsurfUserDir?: string
+  geminiDir?: string
+  agyDir?: string
 }): Promise<{
   target: string
   syncedCount: number
@@ -312,68 +317,181 @@ export async function executeHandoff(opts: {
   }
 
   if (opts.targetAgent === 'cursor') {
-    const aiChatsDir = join(opts.workspacePath, '.ai-chats')
-    const rulesDir = join(opts.workspacePath, '.cursor', 'rules')
-    mkdirSync(aiChatsDir, { recursive: true })
-    mkdirSync(rulesDir, { recursive: true })
-
+    const { seedCursorSidebarConversation } = await import('./sidebar-seeders')
+    let lastDb = ''
+    let lastId = ''
     for (const src of selected) {
-      const brief = buildHandoffBrief({ projectSlug: opts.projectSlug, source: src, maxExcerptChars: 18000 })
-      writeFileSync(join(aiChatsDir, `${src.folderName}.md`), brief + '\n', 'utf8')
+      const turns = extractTurnsFromArchivedConversation(src)
+      const seeded = seedCursorSidebarConversation({
+        sourceId: src.id,
+        workspacePath: opts.workspacePath,
+        title: src.title,
+        updatedAt: src.updatedAt,
+        turns,
+        cursorUserDir: opts.cursorUserDir,
+      })
+      lastDb = seeded.stateDbPath
+      lastId = seeded.composerId
       items.push({
         sourceId: src.id,
+        targetSessionId: seeded.composerId,
         title: src.title,
         sourceAgent: src.agent,
-        turnsSynced: 1,
+        turnsSynced: turns.length,
       })
     }
-
-    const newest = selected[selected.length - 1]
-    const indexLines = [...selected]
-      .reverse()
-      .map(s => `- **${s.title}** (${AGENT_LABELS[s.agent]}, \`${s.updatedAt}\`) -> \`.ai-chats/${s.folderName}.md\``)
-      .join('\n')
-
-    const mdcPath = join(rulesDir, 'chat-sync-handoff.mdc')
-    const mdcContent = [
-      '---',
-      `description: Synced project conversation history (${items.length} chats) across Antigravity, Claude, Codex & Cursor`,
-      'globs: ',
-      'alwaysApply: false',
-      '---',
-      '',
-      `# Synced Project Conversations (\`${opts.projectSlug}\` — ${items.length} Total)`,
-      '',
-      indexLines,
-      '',
-      '---',
-      '',
-      buildHandoffBrief({ projectSlug: opts.projectSlug, source: newest }),
-      '',
-    ].join('\n')
-    writeFileSync(mdcPath, mdcContent, 'utf8')
-    writeFileSync(join(opts.workspacePath, '.ai-handoff.md'), buildHandoffBrief({ projectSlug: opts.projectSlug, source: newest }) + '\n', 'utf8')
-    ensureGitExcludeEntries(opts.workspacePath, ['.cursor/rules/chat-sync-handoff.mdc', '.ai-handoff.md', '.ai-chats/'])
-
     return {
-      target: 'Cursor',
+      target: 'Cursor Sidebar',
       syncedCount: items.length,
-      location: aiChatsDir,
-      resumeHint: `Open Cursor Composer in "${opts.workspacePath}" and tag @.ai-chats/ (all ${items.length} chats) or @chat-sync-handoff.mdc`,
+      sessionId: lastId,
+      location: resolve(lastDb, '..'),
+      resumeHint: `Open Cursor Agent/Composer Sidebar (Reload Window if open) -> all ${items.length} project chat(s) appear directly in Sidebar!`,
       items,
     }
   }
 
-  if (
-    opts.targetAgent === 'windsurf' ||
-    opts.targetAgent === 'cline' ||
-    opts.targetAgent === 'roocode' ||
-    opts.targetAgent === 'copilot' ||
-    opts.targetAgent === 'gemini' ||
-    opts.targetAgent === 'aider' ||
-    opts.targetAgent === 'opencode' ||
-    opts.targetAgent === 'universal'
-  ) {
+  if (opts.targetAgent === 'copilot' || opts.targetAgent === 'windsurf') {
+    const { seedVsCodeChatSidebarConversation } = await import('./sidebar-seeders')
+    const { getVsCodeUserDir, getWindsurfUserDir } = await import('./universal-agents')
+    const ideUserDir =
+      opts.targetAgent === 'windsurf'
+        ? opts.windsurfUserDir || getWindsurfUserDir()
+        : opts.vsCodeUserDir || getVsCodeUserDir()
+    let lastFile = ''
+    let lastId = ''
+    for (const src of selected) {
+      const turns = extractTurnsFromArchivedConversation(src)
+      const seeded = seedVsCodeChatSidebarConversation({
+        sourceId: src.id,
+        workspacePath: opts.workspacePath,
+        title: src.title,
+        updatedAt: src.updatedAt,
+        turns,
+        ideUserDir,
+        responderLabel: opts.targetAgent === 'windsurf' ? 'Windsurf' : 'GitHub Copilot',
+      })
+      lastFile = seeded.sessionFilePath
+      lastId = seeded.sessionId
+      items.push({
+        sourceId: src.id,
+        targetSessionId: seeded.sessionId,
+        title: src.title,
+        sourceAgent: src.agent,
+        turnsSynced: turns.length,
+      })
+    }
+    return {
+      target: opts.targetAgent === 'windsurf' ? 'Windsurf Chat Sidebar' : 'VS Code Copilot Sidebar',
+      syncedCount: items.length,
+      sessionId: lastId,
+      location: resolve(lastFile, '..'),
+      resumeHint: `Open Chat History Sidebar (Reload Window if open) -> all ${items.length} project chat(s) appear directly!`,
+      items,
+    }
+  }
+
+  if (opts.targetAgent === 'cline' || opts.targetAgent === 'roocode') {
+    const { seedClineFamilySidebarConversation } = await import('./sidebar-seeders')
+    const { getVsCodeUserDir } = await import('./universal-agents')
+    const ideUserDir = opts.vsCodeUserDir || getVsCodeUserDir()
+    let lastDir = ''
+    let lastId = ''
+    for (const src of selected) {
+      const turns = extractTurnsFromArchivedConversation(src)
+      const seeded = seedClineFamilySidebarConversation({
+        sourceId: src.id,
+        workspacePath: opts.workspacePath,
+        title: src.title,
+        updatedAt: src.updatedAt,
+        turns,
+        variant: opts.targetAgent,
+        ideUserDir,
+      })
+      lastDir = seeded.taskDir
+      lastId = seeded.taskId
+      items.push({
+        sourceId: src.id,
+        targetSessionId: seeded.taskId,
+        title: src.title,
+        sourceAgent: src.agent,
+        turnsSynced: turns.length,
+      })
+    }
+    return {
+      target: opts.targetAgent === 'roocode' ? 'Roo Code History Sidebar' : 'Cline History Sidebar',
+      syncedCount: items.length,
+      sessionId: lastId,
+      location: resolve(lastDir, '..'),
+      resumeHint: `Open ${opts.targetAgent === 'roocode' ? 'Roo Code' : 'Cline'} "History" tab -> all ${items.length} task(s) appear directly!`,
+      items,
+    }
+  }
+
+  if (opts.targetAgent === 'gemini') {
+    const { seedGeminiCliSidebarConversation } = await import('./sidebar-seeders')
+    let lastFile = ''
+    for (const src of selected) {
+      const turns = extractTurnsFromArchivedConversation(src)
+      const seeded = seedGeminiCliSidebarConversation({
+        sourceId: src.id,
+        workspacePath: opts.workspacePath,
+        title: src.title,
+        updatedAt: src.updatedAt,
+        turns,
+        geminiDir: opts.geminiDir,
+      })
+      lastFile = seeded.filePath
+      items.push({
+        sourceId: src.id,
+        title: src.title,
+        sourceAgent: src.agent,
+        turnsSynced: turns.length,
+      })
+    }
+    return {
+      target: 'Gemini CLI (/chat resume)',
+      syncedCount: items.length,
+      location: resolve(lastFile, '..'),
+      resumeHint: `Run \`gemini\` and type \`/chat resume\` -> all ${items.length} session(s) listed!`,
+      items,
+    }
+  }
+
+  if (opts.targetAgent === 'antigravity') {
+    const { seedAntigravitySidebarConversation } = await import('./sidebar-seeders')
+    let lastDb = ''
+    let lastId = ''
+    for (const src of selected) {
+      const turns = extractTurnsFromArchivedConversation(src)
+      const seeded = seedAntigravitySidebarConversation({
+        sourceId: src.id,
+        workspacePath: opts.workspacePath,
+        title: src.title,
+        updatedAt: src.updatedAt,
+        turns,
+        agyDir: opts.agyDir,
+      })
+      lastDb = seeded.dbPath
+      lastId = seeded.conversationId
+      items.push({
+        sourceId: src.id,
+        targetSessionId: seeded.conversationId,
+        title: src.title,
+        sourceAgent: src.agent,
+        turnsSynced: turns.length,
+      })
+    }
+    return {
+      target: 'Antigravity Sidebar',
+      syncedCount: items.length,
+      sessionId: lastId,
+      location: resolve(lastDb, '..'),
+      resumeHint: `${items.length} conversation(s) injected directly into Antigravity Sidebar (restart Antigravity if open)!`,
+      items,
+    }
+  }
+
+  if (opts.targetAgent === 'aider' || opts.targetAgent === 'opencode' || opts.targetAgent === 'universal') {
     const { writeUniversalWorkspaceContext, UNIVERSAL_AGENT_LABELS } = await import('./universal-agents')
     const sessionsPayload = selected.map(src => ({
       id: src.id,
@@ -407,51 +525,12 @@ export async function executeHandoff(opts: {
 
   const picked = selected[selected.length - 1]
   const brief = buildHandoffBrief({ projectSlug: opts.projectSlug, source: picked })
-
-  if (opts.targetAgent === 'antigravity' && process.env.ANTIGRAVITY_LS_ADDRESS && process.env.ANTIGRAVITY_CSRF_TOKEN) {
-    const payload: Record<string, any> = {
-      title: picked.title.slice(0, 76),
-      model: 'pro',
-      prompt: [{ text: brief }],
-    }
-    if (process.env.ANTIGRAVITY_PROJECT_ID) {
-      payload.projectId = process.env.ANTIGRAVITY_PROJECT_ID
-    }
-    const resp = await fetch(
-      `http://${process.env.ANTIGRAVITY_LS_ADDRESS}/product.v1.ConversationService/CreateConversation`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Connect-Protocol-Version': '1',
-          'x-antigravity-csrf-token': process.env.ANTIGRAVITY_CSRF_TOKEN,
-        },
-        body: JSON.stringify(payload),
-      },
-    )
-    if (resp.ok) {
-      const data = (await resp.json()) as any
-      const newId = data?.conversation?.id
-      if (newId) {
-        items.push({ sourceId: picked.id, targetSessionId: newId, title: picked.title, sourceAgent: picked.agent, turnsSynced: 1 })
-        return {
-          target: 'Antigravity',
-          syncedCount: 1,
-          sessionId: newId,
-          location: `conversation://${newId}`,
-          resumeHint: `Open directly in Antigravity: conversation://${newId} (or run \`restore\` to import full Antigravity DB archive)`,
-          items,
-        }
-      }
-    }
-  }
-
   const outPath = join(opts.workspacePath, '.ai-handoff.md')
   writeFileSync(outPath, brief + '\n', 'utf8')
   ensureGitExcludeEntries(opts.workspacePath, ['.ai-handoff.md'])
   items.push({ sourceId: picked.id, title: picked.title, sourceAgent: picked.agent, turnsSynced: 1 })
   return {
-    target: opts.targetAgent === 'antigravity' ? 'Antigravity (Markdown Brief)' : 'Markdown Brief',
+    target: 'Markdown Brief',
     syncedCount: 1,
     location: outPath,
     resumeHint: `Tag @.ai-handoff.md in your new chat inside "${basename(opts.workspacePath)}"`,

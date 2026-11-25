@@ -22,21 +22,20 @@ Use `chatsync` directly if on `PATH` (`~/.bun/bin/chatsync`), otherwise `bun ~/.
 
 ---
 
-## Mode 1: Single-PC Instant Agent-to-Agent Bridge (NO GitHub Repo Required!)
+## Mode 1: Single-PC Native Sidebar Bridge (NO GitHub & NO `.md` Handoff Files!)
 
-Use this whenever the user is on **one machine** and wants to move/link sessions between AI agents (e.g., quota ran out in one agent, switching from Antigravity to Claude Code / Cursor / Codex / Windsurf / Cline / Copilot, or asking *"continue where I left off in another agent"*):
+Use this whenever the user wants conversations to **appear directly in the native Sidebar / History list** of another AI agent on the same machine (Antigravity, Cursor, VS Code Copilot, Claude Code, Codex, Windsurf, Cline, Roo Code, Gemini CLI):
 
-- **Bridge across ALL installed AI agents on this PC at once:**
+- **Inject all project conversations directly into EVERY installed AI's Sidebar at once:**
   ```bash
   chatsync bridge --workspace "<WORKSPACE_PATH>"
   ```
-- **Send session directly to a specific target agent (`claude` | `codex` | `cursor` | `windsurf` | `cline` | `roocode` | `copilot` | `gemini` | `universal`):**
+- **Inject directly into a specific AI's Sidebar (`cursor` | `copilot` | `claude` | `codex` | `antigravity` | `windsurf` | `cline` | `roocode` | `gemini`):**
   ```bash
   chatsync to <target-agent> --workspace "<WORKSPACE_PATH>"
   ```
-  *(Optional flags: `--from <source-agent>`, `--latest`, `--id <session-id>`).*
-- **If the user asks "continue where I left off":**
-  Run `chatsync to universal --workspace "<WORKSPACE_PATH>"` (if `.chatsync/latest.md` isn't fresh yet), read `<WORKSPACE_PATH>/.chatsync/latest.md`, summarize the current state in 3–5 concise bullets, and continue working immediately!
+  *(Optional flags: `--from <source-agent>`, `--latest`, `--id <session-id>`, `--exclude <current-id>`).*
+  Remind the user to run `Developer: Reload Window` (in Cursor / VS Code / Windsurf) if that IDE was already open so its Sidebar reloads the newly injected conversations immediately.
 
 ---
 

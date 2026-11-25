@@ -1,6 +1,6 @@
 {
   "name": "chatsync",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "type": "module",
   "license": "MIT",
   "description": "Universal AI session bridge & multi-device conversation archiver across ANY AI coding agent (Antigravity, Claude Code, Codex, Cursor, Windsurf, Copilot, Cline, Roo Code, Gemini CLI, Aider & more) — locally on 1 PC or across multiple PCs via GitHub.",

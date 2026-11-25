@@ -147,14 +147,14 @@ describe('archive full-text search, project registry, universal installer & sing
     }
   })
 
-  test('single-PC zero-GitHub executeLocalBridge bridges Copilot, Cline & Aider into Claude, Windsurf & Universal .chatsync/', () => {
+  test('single-PC zero-GitHub executeLocalBridge injects Copilot, Cline & Aider chats directly into Native Sidebars (Cursor, Copilot, Windsurf, Cline, Antigravity & Claude) with ZERO repo handoff files', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'chatsync-bridge-test-'))
     try {
       const wsDir = join(tmp, 'orbit-api')
       mkdirSync(join(wsDir, '.git', 'info'), { recursive: true })
       writeFileSync(join(wsDir, '.git', 'info', 'exclude'), '# git exclude\n', 'utf8')
 
-      // 1. Seed a VS Code GitHub Copilot Chat session + Cline task
+      // 1. Seed a VS Code GitHub Copilot Chat v3 JSONL session + Cline task
       const vsCodeUserDir = join(tmp, 'vscode-user')
       const wsHashDir = join(vsCodeUserDir, 'workspaceStorage', 'hash-orbit-1')
       mkdirSync(join(wsHashDir, 'chatSessions'), { recursive: true })
@@ -164,18 +164,22 @@ describe('archive full-text search, project registry, universal installer & sing
         'utf8',
       )
       writeFileSync(
-        join(wsHashDir, 'chatSessions', 'copilot-sess-1.json'),
+        join(wsHashDir, 'chatSessions', 'copilot-sess-1.jsonl'),
         JSON.stringify({
-          sessionId: 'copilot-sess-1',
-          customTitle: 'JWT Middleware Setup',
-          lastMessageDate: '2026-11-25T18:00:00.000Z',
-          requests: [
-            {
-              message: { text: 'Implement rate limiting on /auth/refresh' },
-              response: [{ value: 'Added sliding-window rate limiter middleware.' }],
-            },
-          ],
-        }),
+          kind: 0,
+          v: {
+            version: 3,
+            sessionId: 'copilot-sess-1',
+            customTitle: 'JWT Middleware Setup',
+            creationDate: 1764093000000,
+            requests: [
+              {
+                message: { text: 'Implement rate limiting on /auth/refresh' },
+                response: [{ value: 'Added sliding-window rate limiter middleware.' }],
+              },
+            ],
+          },
+        }) + '\n',
         'utf8',
       )
 
@@ -202,40 +206,54 @@ describe('archive full-text search, project registry, universal installer & sing
         'utf8',
       )
 
+      const agyDir = join(tmp, 'agy-home')
       const claudeDir = join(tmp, 'claude-home')
       const codexDir = join(tmp, 'codex-home')
+      const cursorUserDir = join(tmp, 'cursor-user')
+      const windsurfUserDir = join(tmp, 'windsurf-user')
+      mkdirSync(agyDir, { recursive: true })
       mkdirSync(claudeDir, { recursive: true })
       mkdirSync(codexDir, { recursive: true })
+      mkdirSync(cursorUserDir, { recursive: true })
+      mkdirSync(windsurfUserDir, { recursive: true })
 
-      // 3. Bridge across ALL agents on 1 PC with ZERO sync.config.json and ZERO GitHub!
+      // 3. Bridge across ALL installed AI Sidebars on 1 PC with ZERO GitHub & ZERO handoff files!
       const bridgeAll = executeLocalBridge({
         workspacePath: wsDir,
         targetAgent: 'all',
-        agyDir: join(tmp, 'empty-agy'),
+        agyDir,
         claudeDir,
         codexDir,
-        cursorUserDir: join(tmp, 'empty-cursor'),
+        cursorUserDir,
         vsCodeUserDir,
+        windsurfUserDir,
         geminiDir: join(tmp, 'empty-gemini'),
       })
 
       expect(bridgeAll.sourceSessionsCount).toBe(3)
-      expect(existsSync(join(wsDir, '.chatsync', 'latest.md'))).toBe(true)
-      expect(readFileSync(join(wsDir, '.git', 'info', 'exclude'), 'utf8')).toContain('.chatsync/')
+      // Verify ZERO .ai-handoff.md or .chatsync/ clutter written to workspace!
+      expect(existsSync(join(wsDir, '.ai-handoff.md'))).toBe(false)
+      expect(existsSync(join(wsDir, '.chatsync'))).toBe(false)
 
-      // 4. Bridge specifically to Windsurf
-      const bridgeWindsurf = executeLocalBridge({
+      // Verify Native Sidebar DBs were populated across Cursor, Antigravity, Copilot, Windsurf, Cline, Claude & Codex!
+      expect(existsSync(join(cursorUserDir, 'globalStorage', 'state.vscdb'))).toBe(true)
+      expect(existsSync(join(agyDir, 'conversation_summaries.db'))).toBe(true)
+      expect(existsSync(join(windsurfUserDir, 'workspaceStorage'))).toBe(true)
+      expect(existsSync(join(vsCodeUserDir, 'globalStorage', 'state.vscdb'))).toBe(true)
+
+      // Verify idempotency: running bridge a second time does NOT multiply sessions (still 3, not 6!)
+      const bridgeAgain = executeLocalBridge({
         workspacePath: wsDir,
-        targetAgent: 'windsurf',
-        agyDir: join(tmp, 'empty-agy'),
+        targetAgent: 'all',
+        agyDir,
         claudeDir,
         codexDir,
-        cursorUserDir: join(tmp, 'empty-cursor'),
+        cursorUserDir,
         vsCodeUserDir,
+        windsurfUserDir,
         geminiDir: join(tmp, 'empty-gemini'),
       })
-      expect(bridgeWindsurf.bridgedTargets[0].targetAgent).toBe('Windsurf')
-      expect(existsSync(join(wsDir, '.windsurf', 'rules', 'chatsync-handoff.md'))).toBe(true)
+      expect(bridgeAgain.sourceSessionsCount).toBe(3)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }

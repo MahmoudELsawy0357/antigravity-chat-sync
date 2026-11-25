@@ -1,7 +1,7 @@
 {
   "name": "chatsync",
   "displayName": "ChatSync — Universal AI Session Bridge",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Link, switch, search, and sync project conversations across ANY AI coding agent (Antigravity, Claude Code, Codex, Cursor, Windsurf, Cline, Copilot, Gemini CLI, Aider & more) — locally on 1 PC or across multiple PCs via GitHub.",
   "logo": "assets/logo.svg",
   "author": {

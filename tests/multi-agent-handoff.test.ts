@@ -265,17 +265,18 @@ describe('multi-agent adapters (Claude Code, Codex, Cursor) & cross-agent handof
       expect(codexResAgain.syncedCount).toBe(2)
       expect(readFileSync(join(codexHome, 'session_index.jsonl'), 'utf8').trim().split('\n').length).toBe(2)
 
-      // 3. Handoff -> Cursor (verifying .git/info/exclude protection!)
+      // 3. Handoff -> Cursor Native Sidebar (verifying SQLite composerHeaders + bubbleId injection & zero repo files!)
+      const cursorHome = join(tmp, 'cursor-user')
       const cursorRes = await executeHandoff({
         archiveRoot: archiveDir,
         projectSlug: 'althabit-dashboard',
         workspacePath: wsDir,
         targetAgent: 'cursor',
+        cursorUserDir: cursorHome,
       })
-      expect(existsSync(cursorRes.location)).toBe(true)
-      const excludeText = readFileSync(join(wsDir, '.git', 'info', 'exclude'), 'utf8')
-      expect(excludeText).toContain('.cursor/rules/chat-sync-handoff.mdc')
-      expect(excludeText).toContain('.ai-handoff.md')
+      expect(cursorRes.syncedCount).toBe(2)
+      expect(existsSync(join(cursorHome, 'globalStorage', 'state.vscdb'))).toBe(true)
+      expect(existsSync(join(wsDir, '.ai-handoff.md'))).toBe(false)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }

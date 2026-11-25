@@ -8,6 +8,7 @@ import {
   collectCursorSessions,
   getClaudeDir,
   getCodexDir,
+  getCursorUserDir,
   type NormalizedTurn,
   seedClaudeConversation,
   seedCodexConversation,
@@ -16,13 +17,20 @@ import { getAntigravityDir, getArgValue } from './config'
 import { extractTurns } from './markdown-exporter'
 import { findRegisteredProject } from './registry'
 import {
+  seedAntigravitySidebarConversation,
+  seedClineFamilySidebarConversation,
+  seedCursorSidebarConversation,
+  seedGeminiCliSidebarConversation,
+  seedVsCodeChatSidebarConversation,
+} from './sidebar-seeders'
+import {
   collectAiderSessions,
   collectClineFamilySessions,
   collectCopilotSessions,
   collectGeminiCliSessions,
-  getWindsurfCodeiumDir,
+  getGeminiCliDir,
+  getVsCodeUserDir,
   getWindsurfUserDir,
-  UNIVERSAL_AGENT_LABELS,
   writeUniversalWorkspaceContext,
 } from './universal-agents'
 
@@ -51,11 +59,16 @@ export function collectLocalAntigravitySessions(opts: {
   try {
     const db = new Database(sumDbPath, { readonly: true })
     const rows = db
-      .query("SELECT conversation_id, title, preview, workspace_uris, last_modified_time FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time ASC")
+      .query("SELECT conversation_id, title, preview, step_count, source, workspace_uris, last_modified_time FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time ASC")
       .all() as any[]
 
     for (const r of rows) {
       if (opts.excludedIds?.has(r.conversation_id)) continue
+      const srcTag = String(r.source || '')
+      if (srcTag.startsWith('chatsync-mirror:')) {
+        const seededSteps = Number(srcTag.split(':')[1] || 0)
+        if ((r.step_count ?? 0) <= seededSteps) continue
+      }
       let ws = String(r.workspace_uris || '')
       try {
         ws = decodeURIComponent(ws)
@@ -87,10 +100,6 @@ export function collectLocalAntigravitySessions(opts: {
   return out
 }
 
-/**
- * Discovers ALL live conversations for a project directly from every installed AI agent
- * on the current PC — requiring ZERO GitHub repo, ZERO sync.config.json, and ZERO prior setup!
- */
 export function discoverAllLocalProjectSessions(opts: {
   workspacePath: string
   projectSlug?: string
@@ -174,7 +183,6 @@ export function discoverAllLocalProjectSessions(opts: {
     }),
   ]
 
-  // Sort oldest-to-newest soNewest is last
   return sessions.sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)))
 }
 
@@ -191,13 +199,14 @@ export interface LocalBridgeResult {
 }
 
 /**
- * Bridges live project sessions directly across AI agents on a SINGLE machine (Zero GitHub required!).
+ * Injects live project conversations DIRECTLY into the native Sidebar / History databases
+ * of installed AI IDEs & CLI agents on a single PC — ZERO GitHub repo & ZERO `.md` handoff files!
  */
 export function executeLocalBridge(opts: {
   workspacePath: string
   projectSlug?: string
   legacyProjectSlugs?: string[]
-  targetAgent?: string // 'all' | 'claude' | 'codex' | 'cursor' | 'windsurf' | 'cline' | 'roocode' | 'copilot' | 'gemini' | 'universal'
+  targetAgent?: string // 'all' | 'antigravity' | 'claude' | 'codex' | 'cursor' | 'copilot' | 'windsurf' | 'cline' | 'roocode' | 'gemini' | 'universal'
   fromAgent?: string
   sessionId?: string
   latestOnly?: boolean
@@ -207,6 +216,7 @@ export function executeLocalBridge(opts: {
   codexDir?: string
   cursorUserDir?: string
   vsCodeUserDir?: string
+  windsurfUserDir?: string
   geminiDir?: string
 }): LocalBridgeResult {
   const ws = resolve(opts.workspacePath)
@@ -240,34 +250,65 @@ export function executeLocalBridge(opts: {
   const selected = opts.latestOnly ? [discovered[discovered.length - 1]] : discovered
   const rawTarget = (opts.targetAgent || 'all').toLowerCase()
 
+  const agyRoot = opts.agyDir || getAntigravityDir()
+  const claudeRoot = opts.claudeDir || getClaudeDir()
+  const codexRoot = opts.codexDir || getCodexDir()
+  const cursorRoot = opts.cursorUserDir || getCursorUserDir()
+  const vsCodeRoot = opts.vsCodeUserDir || getVsCodeUserDir()
+  const windsurfRoot = opts.windsurfUserDir || getWindsurfUserDir()
+  const geminiRoot = opts.geminiDir || getGeminiCliDir()
+
   const targetsToRun: string[] = []
   if (rawTarget === 'all' || rawTarget === 'auto') {
-    const claudeRoot = opts.claudeDir || getClaudeDir()
-    const codexRoot = opts.codexDir || getCodexDir()
-    const cursorRoot =
-      opts.cursorUserDir ||
-      join(
-        process.platform === 'win32'
-          ? process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
-          : process.platform === 'darwin'
-            ? join(homedir(), 'Library', 'Application Support')
-            : join(homedir(), '.config'),
-        'Cursor',
-        'User',
-      )
+    if (existsSync(agyRoot)) targetsToRun.push('antigravity')
     if (existsSync(claudeRoot)) targetsToRun.push('claude')
     if (existsSync(codexRoot)) targetsToRun.push('codex')
     if (existsSync(cursorRoot)) targetsToRun.push('cursor')
-    if (existsSync(getWindsurfUserDir()) || existsSync(getWindsurfCodeiumDir())) targetsToRun.push('windsurf')
-    targetsToRun.push('universal')
+    if (existsSync(vsCodeRoot)) targetsToRun.push('copilot')
+    if (existsSync(windsurfRoot)) targetsToRun.push('windsurf')
+    if (
+      existsSync(join(vsCodeRoot, 'globalStorage', 'saoudrizwan.claude-dev')) ||
+      existsSync(join(cursorRoot, 'globalStorage', 'saoudrizwan.claude-dev'))
+    ) {
+      targetsToRun.push('cline')
+    }
+    if (
+      existsSync(join(vsCodeRoot, 'globalStorage', 'rooveterinaryinc.roo-cline')) ||
+      existsSync(join(cursorRoot, 'globalStorage', 'rooveterinaryinc.roo-cline'))
+    ) {
+      targetsToRun.push('roocode')
+    }
+    if (existsSync(join(geminiRoot, 'tmp'))) targetsToRun.push('gemini')
   } else {
-    targetsToRun.push(rawTarget === 'markdown' || rawTarget === 'any' ? 'universal' : rawTarget)
+    targetsToRun.push(rawTarget === 'vscode' ? 'copilot' : rawTarget)
   }
 
   const bridgedTargets: LocalBridgeResult['bridgedTargets'] = []
 
   for (const tgt of targetsToRun) {
-    if (tgt === 'claude') {
+    if (tgt === 'antigravity') {
+      const nonAgy = selected.filter(s => s.agent !== 'antigravity')
+      if (nonAgy.length > 0) {
+        let lastDb = ''
+        for (const s of nonAgy) {
+          const seeded = seedAntigravitySidebarConversation({
+            sourceId: s.id,
+            workspacePath: ws,
+            title: s.title,
+            updatedAt: s.updatedAt,
+            turns: s.turns.slice(-80),
+            agyDir: agyRoot,
+          })
+          lastDb = seeded.dbPath
+        }
+        bridgedTargets.push({
+          targetAgent: 'Antigravity Sidebar',
+          syncedCount: nonAgy.length,
+          location: resolve(lastDb, '..'),
+          resumeHint: `${nonAgy.length} external conversation(s) injected into Antigravity Sidebar (restart Antigravity if open)`,
+        })
+      }
+    } else if (tgt === 'claude') {
       const nonClaude = selected.filter(s => s.agent !== 'claude')
       const pool = nonClaude.length > 0 ? nonClaude : selected
       let lastPath = ''
@@ -275,19 +316,19 @@ export function executeLocalBridge(opts: {
         const seeded = seedClaudeConversation({
           sourceId: s.id,
           workspacePath: ws,
-          title: `[${s.agentLabel}] ${s.title}`,
+          title: s.title,
           updatedAt: s.updatedAt,
-          turns: s.turns.slice(-70),
-          claudeDir: opts.claudeDir,
+          turns: s.turns.slice(-80),
+          claudeDir: claudeRoot,
         })
         lastPath = seeded.filePath
       }
       if (lastPath) {
         bridgedTargets.push({
-          targetAgent: 'Claude Code',
+          targetAgent: 'Claude Code Sidebar',
           syncedCount: pool.length,
           location: resolve(lastPath, '..'),
-          resumeHint: `cd "${ws}" && claude --resume`,
+          resumeHint: `Open Claude Code Sidebar ("Past Conversations") or \`claude --resume\` -> ${pool.length} chat(s) ready!`,
         })
       }
     } else if (tgt === 'codex') {
@@ -298,35 +339,144 @@ export function executeLocalBridge(opts: {
         const seeded = seedCodexConversation({
           sourceId: s.id,
           workspacePath: ws,
-          title: `[${s.agentLabel}] ${s.title}`,
+          title: s.title,
           updatedAt: s.updatedAt,
-          turns: s.turns.slice(-70),
-          codexDir: opts.codexDir,
+          turns: s.turns.slice(-80),
+          codexDir: codexRoot,
         })
         lastPath = seeded.filePath
       }
       if (lastPath) {
         bridgedTargets.push({
-          targetAgent: 'Codex',
+          targetAgent: 'Codex Sidebar',
           syncedCount: pool.length,
           location: resolve(lastPath, '..', '..', '..'),
-          resumeHint: `Reload VS Code / Codex window -> ${pool.length} conversation(s) appear in Codex Chats!`,
+          resumeHint: `Open Codex "Chats" Sidebar in VS Code (Reload Window if open) -> ${pool.length} chat(s) ready!`,
+        })
+      }
+    } else if (tgt === 'cursor') {
+      const nonCursor = selected.filter(s => s.agent !== 'cursor')
+      const pool = nonCursor.length > 0 ? nonCursor : selected
+      let lastDb = ''
+      for (const s of pool) {
+        const seeded = seedCursorSidebarConversation({
+          sourceId: s.id,
+          workspacePath: ws,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turns: s.turns.slice(-80),
+          cursorUserDir: cursorRoot,
+        })
+        lastDb = seeded.stateDbPath
+      }
+      if (lastDb) {
+        bridgedTargets.push({
+          targetAgent: 'Cursor Sidebar',
+          syncedCount: pool.length,
+          location: resolve(lastDb, '..'),
+          resumeHint: `Open Cursor Agent/Composer Sidebar (Reload Window if open) -> ${pool.length} chat(s) appear directly in Sidebar!`,
+        })
+      }
+    } else if (tgt === 'copilot') {
+      const nonCopilot = selected.filter(s => s.agent !== 'copilot')
+      const pool = nonCopilot.length > 0 ? nonCopilot : selected
+      let lastFile = ''
+      for (const s of pool) {
+        const seeded = seedVsCodeChatSidebarConversation({
+          sourceId: s.id,
+          workspacePath: ws,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turns: s.turns.slice(-80),
+          ideUserDir: vsCodeRoot,
+          responderLabel: 'GitHub Copilot',
+        })
+        lastFile = seeded.sessionFilePath
+      }
+      if (lastFile) {
+        bridgedTargets.push({
+          targetAgent: 'VS Code Copilot Sidebar',
+          syncedCount: pool.length,
+          location: resolve(lastFile, '..'),
+          resumeHint: `Open VS Code Chat History icon (Reload Window if open) -> ${pool.length} chat(s) appear directly in Sidebar!`,
+        })
+      }
+    } else if (tgt === 'windsurf') {
+      let lastFile = ''
+      for (const s of selected) {
+        const seeded = seedVsCodeChatSidebarConversation({
+          sourceId: s.id,
+          workspacePath: ws,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turns: s.turns.slice(-80),
+          ideUserDir: windsurfRoot,
+          responderLabel: 'Windsurf',
+        })
+        lastFile = seeded.sessionFilePath
+      }
+      if (lastFile) {
+        bridgedTargets.push({
+          targetAgent: 'Windsurf Chat Sidebar',
+          syncedCount: selected.length,
+          location: resolve(lastFile, '..'),
+          resumeHint: `Open Windsurf Chat History Sidebar (Reload Window if open) -> ${selected.length} chat(s) ready!`,
+        })
+      }
+    } else if (tgt === 'cline' || tgt === 'roocode') {
+      const targetIdeDir = existsSync(join(cursorRoot, 'globalStorage')) && !existsSync(vsCodeRoot) ? cursorRoot : vsCodeRoot
+      let lastDir = ''
+      for (const s of selected) {
+        const seeded = seedClineFamilySidebarConversation({
+          sourceId: s.id,
+          workspacePath: ws,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turns: s.turns.slice(-80),
+          variant: tgt,
+          ideUserDir: targetIdeDir,
+        })
+        lastDir = seeded.taskDir
+      }
+      if (lastDir) {
+        bridgedTargets.push({
+          targetAgent: tgt === 'roocode' ? 'Roo Code History Sidebar' : 'Cline History Sidebar',
+          syncedCount: selected.length,
+          location: resolve(lastDir, '..'),
+          resumeHint: `Open ${tgt === 'roocode' ? 'Roo Code' : 'Cline'} "History" tab -> ${selected.length} task(s) appear directly!`,
+        })
+      }
+    } else if (tgt === 'gemini') {
+      let lastFile = ''
+      for (const s of selected) {
+        const seeded = seedGeminiCliSidebarConversation({
+          sourceId: s.id,
+          workspacePath: ws,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turns: s.turns.slice(-80),
+          geminiDir: geminiRoot,
+        })
+        lastFile = seeded.filePath
+      }
+      if (lastFile) {
+        bridgedTargets.push({
+          targetAgent: 'Gemini CLI (/chat resume)',
+          syncedCount: selected.length,
+          location: resolve(lastFile, '..'),
+          resumeHint: `Run \`gemini\` in "${ws}" and type \`/chat resume\` -> ${selected.length} session(s) listed!`,
         })
       }
     } else {
-      const mappedTarget = (
-        ['cursor', 'windsurf', 'cline', 'roocode', 'copilot', 'gemini', 'aider', 'opencode'].includes(tgt)
-          ? tgt
-          : 'universal'
-      ) as any
+      // Explicit `chatsync to universal` fallback for web/custom tools with no local sidebar DB
       const res = writeUniversalWorkspaceContext({
         workspacePath: ws,
         projectSlug,
-        targetAgent: mappedTarget,
+        targetAgent: 'universal',
         sessions: selected,
       })
       bridgedTargets.push({
-        targetAgent: UNIVERSAL_AGENT_LABELS[mappedTarget] || tgt,
+        targetAgent: 'Universal Context (.chatsync)',
         syncedCount: selected.length,
         location: res.location,
         resumeHint: res.resumeHint,
@@ -354,7 +504,6 @@ if (import.meta.main) {
     }
   }
 
-  // Support positional `chatsync to <agent>` or `--to <agent>`
   const args = process.argv.slice(2)
   let targetAgent = getArgValue('--to') || 'all'
   if (!getArgValue('--to') && args[0] && !args[0].startsWith('--')) {
@@ -375,11 +524,11 @@ if (import.meta.main) {
   })
 
   console.log(
-    `\n⚡ Local AI Bridge Complete — "${res.projectSlug}" (${res.sourceSessionsCount} session(s) bridged with zero GitHub needed!)`,
+    `\n⚡ Native Sidebar Bridge Complete — "${res.projectSlug}" (${res.sourceSessionsCount} conversation(s) injected directly into AI Sidebars!)`,
   )
-  console.log('─'.repeat(80))
+  console.log('─'.repeat(86))
   for (const b of res.bridgedTargets) {
-    console.log(`  ✓ ${b.targetAgent.padEnd(28, ' ')} -> ${b.resumeHint}`)
+    console.log(`  ✓ ${b.targetAgent.padEnd(26, ' ')} -> ${b.resumeHint}`)
   }
-  console.log('─'.repeat(80) + '\n')
+  console.log('─'.repeat(86) + '\n')
 }

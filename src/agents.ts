@@ -534,8 +534,43 @@ export function collectCursorSessions(opts: {
                   if (gRow?.value) {
                     const gStr = typeof gRow.value === 'string' ? gRow.value : Buffer.from(gRow.value).toString('utf8')
                     const gParsed = JSON.parse(gStr)
-                    if (Array.isArray(gParsed?.conversation)) {
+                    if (Array.isArray(gParsed?.conversation) && gParsed.conversation.length > 0) {
                       conversation = gParsed.conversation
+                    } else {
+                      let headers: Array<{ bubbleId: string; type?: number }> = Array.isArray(gParsed?.fullConversationHeadersOnly)
+                        ? gParsed.fullConversationHeadersOnly
+                        : []
+                      if (headers.length === 0) {
+                        const hRow = globalDb
+                          .query('SELECT value FROM cursorDiskKV WHERE key = ?')
+                          .get(`composerConvHeaders:${id}:000000`) as { value: string | Uint8Array } | null
+                        if (hRow?.value) {
+                          const hStr = typeof hRow.value === 'string' ? hRow.value : Buffer.from(hRow.value).toString('utf8')
+                          const hParsed = JSON.parse(hStr)
+                          if (Array.isArray(hParsed)) headers = hParsed
+                        }
+                      }
+                      // Skip unmodified sidebar mirrors so we never create feedback loops
+                      if (
+                        typeof gParsed?.chatsyncMirrorCount === 'number' &&
+                        headers.length <= gParsed.chatsyncMirrorCount
+                      ) {
+                        continue
+                      }
+                      for (const h of headers) {
+                        if (!h?.bubbleId) continue
+                        const bRow = globalDb
+                          .query('SELECT value FROM cursorDiskKV WHERE key = ?')
+                          .get(`bubbleId:${id}:${h.bubbleId}`) as { value: string | Uint8Array } | null
+                        if (bRow?.value) {
+                          const bStr = typeof bRow.value === 'string' ? bRow.value : Buffer.from(bRow.value).toString('utf8')
+                          const bObj = JSON.parse(bStr)
+                          conversation.push({
+                            type: bObj.type ?? h.type,
+                            text: bObj.text || bObj.rawText || '',
+                          })
+                        }
+                      }
                     }
                   }
                 } catch {}

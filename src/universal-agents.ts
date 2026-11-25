@@ -94,7 +94,7 @@ function titleFromTurns(turns: NormalizedTurn[], fallback: string): string {
 }
 
 /**
- * 1. GitHub Copilot Chat (VS Code workspaceStorage/<hash>/chatSessions/<id>.json)
+ * 1. GitHub Copilot Chat & VS Code-based Chat (`workspaceStorage/<hash>/chatSessions/<id>.json` & `.jsonl`)
  */
 export function collectCopilotSessions(opts: {
   projectSlug: string
@@ -119,12 +119,46 @@ export function collectCopilotSessions(opts: {
       if (!existsSync(chatDir)) continue
 
       for (const f of readdirSync(chatDir)) {
-        if (!f.endsWith('.json')) continue
+        if (!f.endsWith('.json') && !f.endsWith('.jsonl')) continue
         const fp = join(chatDir, f)
-        const raw = JSON.parse(readFileSync(fp, 'utf8'))
-        const requests: any[] = Array.isArray(raw?.requests) ? raw.requests : []
-        const turns: NormalizedTurn[] = []
+        let raw: any = null
 
+        if (f.endsWith('.json')) {
+          raw = JSON.parse(readFileSync(fp, 'utf8'))
+        } else {
+          // VS Code 1.99+ JSONL event-sourced format (`kind: 0` base + `kind: 1/2` key-path mutations)
+          const lines = readFileSync(fp, 'utf8').split(/\r?\n/).filter(Boolean)
+          for (const line of lines) {
+            try {
+              const evt = JSON.parse(line)
+              if (evt.kind === 0 && evt.v) {
+                raw = evt.v
+              } else if (raw && (evt.kind === 1 || evt.kind === 2) && Array.isArray(evt.k)) {
+                let target: any = raw
+                for (let ki = 0; ki < evt.k.length - 1; ki++) {
+                  if (target == null) break
+                  target = target[evt.k[ki]]
+                }
+                const lastKey = evt.k[evt.k.length - 1]
+                if (target != null && lastKey !== undefined) {
+                  if (evt.kind === 2 && Array.isArray(target[lastKey]) && Array.isArray(evt.v)) {
+                    target[lastKey].push(...evt.v)
+                  } else {
+                    target[lastKey] = evt.v
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+
+        if (!raw) continue
+        const requests: any[] = Array.isArray(raw?.requests) ? raw.requests : []
+        if (typeof raw?.chatsyncMirrorCount === 'number' && requests.length <= raw.chatsyncMirrorCount) {
+          continue
+        }
+
+        const turns: NormalizedTurn[] = []
         for (const req of requests) {
           const userMsg = typeof req?.message?.text === 'string' ? redactText(req.message.text.trim()) : ''
           if (userMsg) turns.push({ role: 'user', text: userMsg })
@@ -132,8 +166,13 @@ export function collectCopilotSessions(opts: {
           const respParts: string[] = []
           if (Array.isArray(req?.response)) {
             for (const part of req.response) {
-              if (typeof part?.value === 'string') respParts.push(part.value.trim())
-              else if (typeof part?.content?.value === 'string') respParts.push(part.content.value.trim())
+              if (part?.kind === 'thinking' || part?.kind === 'mcpServersStarting' || part?.kind === 'progressTaskSerialized') {
+                continue
+              }
+              if (typeof part?.value === 'string' && part.value.trim()) respParts.push(part.value.trim())
+              else if (typeof part?.content?.value === 'string' && part.content.value.trim()) {
+                respParts.push(part.content.value.trim())
+              }
             }
           }
           const assistantMsg = redactText(respParts.filter(Boolean).join('\n\n'))
@@ -141,7 +180,7 @@ export function collectCopilotSessions(opts: {
         }
 
         if (turns.length === 0) continue
-        const id = raw.sessionId || f.replace(/\.json$/, '')
+        const id = raw.sessionId || f.replace(/\.jsonl?$/, '')
         const updatedAt = raw.lastMessageDate
           ? new Date(raw.lastMessageDate).toISOString()
           : statSync(fp).mtime.toISOString()
@@ -200,7 +239,8 @@ export function collectClineFamilySessions(opts: {
           if (!matchesSlug(rawText, opts.projectSlug, opts.legacyProjectSlugs)) continue
 
           const msgs: any[] = JSON.parse(rawText)
-          if (!Array.isArray(msgs)) continue
+          if (!Array.isArray(msgs) || msgs.length === 0) continue
+          if (msgs[msgs.length - 1]?.chatsyncMirror === true) continue
           const turns: NormalizedTurn[] = []
 
           for (const m of msgs) {
@@ -328,6 +368,9 @@ export function collectGeminiCliSessions(opts: {
 
         const parsed = JSON.parse(rawStr)
         const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : Array.isArray(parsed) ? parsed : []
+        if (typeof parsed?.chatsyncMirrorCount === 'number' && messages.length <= parsed.chatsyncMirrorCount) {
+          continue
+        }
         const turns: NormalizedTurn[] = []
 
         for (const m of messages) {

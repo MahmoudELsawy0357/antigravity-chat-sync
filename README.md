@@ -55,22 +55,24 @@ What this installs in ~2 seconds:
 Only working on **one computer** and want to connect your AI agents together without creating any GitHub repo or `sync.config.json`? `cd` into **any** project and run:
 
 ```bash
-# Link ALL sessions across every AI agent installed on your PC at once:
+# Inject ALL project conversations directly into EVERY installed AI's Sidebar at once:
 chatsync bridge
 
-# Or send your project sessions directly to a specific AI agent:
-chatsync to claude      # -> Seeds native resumable `claude --resume` history
-chatsync to codex       # -> Seeds native Codex CLI & VS Code sidebar threads
-chatsync to cursor      # -> Writes git-excluded `.cursor/rules/chatsync-handoff.mdc`
-chatsync to windsurf    # -> Writes git-excluded `.windsurf/rules/chatsync-handoff.md`
-chatsync to cline       # -> Writes git-excluded `.clinerules/chatsync-handoff.md`
-chatsync to universal   # -> Writes `.chatsync/latest.md` + `.chatsync/sessions/*.md` for ANY AI tool!
+# Or inject directly into a specific AI's Native Sidebar (ZERO .md handoff files!):
+chatsync to cursor        # -> Injects directly into Cursor Agent/Composer Sidebar (state.vscdb + composerHeaders)
+chatsync to copilot       # -> Injects directly into VS Code GitHub Copilot Chat History Sidebar
+chatsync to claude        # -> Injects directly into Claude Code Sidebar ("Past Conversations") & `claude --resume`
+chatsync to codex         # -> Injects directly into Codex VS Code "Chats" Sidebar & `codex resume`
+chatsync to antigravity   # -> Injects external chats directly into Google Antigravity Sidebar!
+chatsync to windsurf      # -> Injects directly into Windsurf Chat History Sidebar
+chatsync to cline         # -> Injects directly into Cline / Roo Code "History" Sidebar
+chatsync to gemini        # -> Injects directly into Gemini CLI `/chat resume` list
 
 # Inspect all detected AI agents & live sessions for the current folder:
 chatsync status
 ```
 
-> All local context files (`.chatsync/`, `.cursor/rules/chatsync-handoff.mdc`, `.windsurf/rules/chatsync-handoff.md`, `.clinerules/chatsync-handoff.md`) are automatically added to `.git/info/exclude` so your team's `git status` stays **100% clean**.
+> **Zero Repo Clutter:** Unlike basic handoff prompts that dump `.md` summary files into your workspace, `chatsync` writes multi-turn message bubbles directly into each IDE's native SQLite / JSONL sidebar database!
 
 ---
 
