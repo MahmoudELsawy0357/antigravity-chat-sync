@@ -179,6 +179,9 @@ export async function runBootstrap(): Promise<void> {
       const enableAutostartAns = (
         await prompter.ask('Enable silent background auto-sync on OS login? [Y/n]: ')
       ).trim().toLowerCase()
+      const createShortcutAns = (
+        await prompter.ask('Create branded ChatSync Desktop launcher shortcut? [Y/n]: ')
+      ).trim().toLowerCase()
       const createRemoteAns = (
         await prompter.ask(`Create & push private GitHub repo (${archiveRepo}) now? [Y/n]: `)
       ).trim().toLowerCase()
@@ -190,6 +193,7 @@ export async function runBootstrap(): Promise<void> {
         archiveRepo,
         installPlugin: installPluginAns !== 'n',
         enableAutostart: enableAutostartAns !== 'n',
+        createShortcut: createShortcutAns !== 'n',
         pushRemote: createRemoteAns !== 'n',
       })
     } finally {
@@ -223,6 +227,7 @@ export async function runBootstrap(): Promise<void> {
     archiveRepo,
     installPlugin: process.argv.includes('--install-plugin') || !process.argv.includes('--no-plugin'),
     enableAutostart: process.argv.includes('--autostart'),
+    createShortcut: !process.argv.includes('--no-shortcut'),
     pushRemote: process.argv.includes('--push'),
   })
 }
@@ -234,11 +239,12 @@ interface ProvisionOptions {
   archiveRepo: string
   installPlugin: boolean
   enableAutostart: boolean
+  createShortcut: boolean
   pushRemote: boolean
 }
 
 async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
-  const { projectSlug, workspacePath, targetDir, archiveRepo, installPlugin, enableAutostart, pushRemote } = opts
+  const { projectSlug, workspacePath, targetDir, archiveRepo, installPlugin, enableAutostart, createShortcut, pushRemote } = opts
 
   const repoCheck = pushRemote
     ? spawnSync('gh', ['repo', 'view', archiveRepo, '--json', 'name'], {
@@ -341,6 +347,14 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
 
   if (enableAutostart) {
     runStep(process.execPath, ['run', 'src/autostart.ts'], targetDir)
+  }
+
+  if (createShortcut) {
+    const scArgs = ['run', 'src/shortcut.ts']
+    if (workspacePath && existsSync(resolve(workspacePath))) {
+      scArgs.push('--workspace', resolve(workspacePath))
+    }
+    runStep(process.execPath, scArgs, targetDir)
   }
 
   console.log('\nSetup complete!')
