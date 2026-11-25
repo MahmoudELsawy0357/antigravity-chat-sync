@@ -1,4 +1,4 @@
-# 💬 `antigravity-chat-sync`
+# `antigravity-chat-sync`
 
 **Project-scoped Google Antigravity conversation archiver and multi-device sync toolkit** backed by a private GitHub repository.
 
@@ -6,22 +6,22 @@ Keep all your **Google Antigravity** conversations, plans, and artifacts for a s
 
 ---
 
-## ✨ Features
+## Features
 
-- 🎯 **Strict Project Isolation:** Filters `~/.gemini/antigravity` by `workspace_uris` so **only** conversations (and subagents) belonging to your target project are archived.
-- 📖 **GitHub-Ready Markdown + Artifacts:** Exports clean chronological transcripts and generated plans/walkthroughs, auto-splitting transcripts over `380 KB` into linked parts so GitHub renders every page in full.
-- 🔁 **Smart Multi-Device Additive Merge:** Syncs across any number of machines without overwriting newer local work or deleting conversations created on another machine.
-- 🗺️ **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects (or auto-creates on brand-new machines) `~/.gemini/config/projects/*.json`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` & cross-user `brain/` artifact links across drives/OSes.
-- 🧩 **In-Place Rebinding, Extras & Renamed Folders (`legacyProjectSlugs`):** Rebinds newer local chats and subagents carrying a foreign `project_id` in-place without downgrading step counts, preserves `annotations/` & `chapter_titles/`, and remaps historical conversations from renamed project folders.
-- 💾 **SQLite WAL-Safe Sync, `--wait` Restore & `doctor`:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)`, cleans orphan split chunks, supports `bun run restore --wait` (auto-finalizes the instant Antigravity closes), and provides `bun run status` / `bun run doctor` health diagnostics.
-- 🔒 **Protobuf-Safe Secret Redaction & Multi-Part Audit:** Scrubs Jira, Postman (`PMAK-...`), GitHub, Google, Slack, Stripe, OpenAI/Anthropic, AWS, Private Keys, DB URLs with passwords, and JWTs using **Same-Byte-Length Redaction + `VACUUM`**, and `bun run verify` reassembles & scans multi-part `.gz.partNN` archives before push.
-- 📦 **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
-- 🤖 **Silent OS Startup Auto-Sync Daemon (`bun run autostart`) + 1-Click Launcher (`bun run shortcut`):** Runs silently in the background on Windows/macOS/Linux login (0 console flash, immune to `Reload Window` / `Server Restart`) — auto-restores on boot while Antigravity is closed, and auto-syncs after **3 min idle**, every **15 min of active work**, and on **exit** regardless of how you open Antigravity!
-- 📄 **Zero-Terminal Playbooks:** Also includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
+- **Strict Project Isolation:** Filters `~/.gemini/antigravity` by `workspace_uris` so **only** conversations (and subagents) belonging to your target project are archived.
+- **GitHub-Ready Markdown + Artifacts:** Exports clean chronological transcripts and generated plans/walkthroughs, auto-splitting transcripts over `380 KB` into linked parts so GitHub renders every page in full.
+- **Smart Multi-Device Additive Merge:** Syncs across any number of machines without overwriting newer local work or deleting conversations created on another machine.
+- **Antigravity 2.x Project ID & Cross-Drive Remapping:** Auto-detects (or auto-creates on brand-new machines) `~/.gemini/config/projects/*.json`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, drops missing foreign workspaces, and adapts `workspace_uris` & cross-user `brain/` artifact links across drives/OSes.
+- **In-Place Rebinding, Extras & Renamed Folders (`legacyProjectSlugs`):** Rebinds newer local chats and subagents carrying a foreign `project_id` in-place without downgrading step counts, preserves `annotations/` & `chapter_titles/`, and remaps historical conversations from renamed project folders.
+- **SQLite WAL-Safe Sync, `--wait` Restore & `doctor`:** Captures active `-wal`/`-shm` frames with `PRAGMA wal_checkpoint(TRUNCATE)`, cleans orphan split chunks, supports `bun run restore --wait` (auto-finalizes the instant Antigravity closes), and provides `bun run status` / `bun run doctor` health diagnostics.
+- **Protobuf-Safe Secret Redaction & Multi-Part Audit:** Scrubs Jira, Postman (`PMAK-...`), GitHub, Google, Slack, Stripe, OpenAI/Anthropic, AWS, Private Keys, DB URLs with passwords, and JWTs using **Same-Byte-Length Redaction + `VACUUM`**, and `bun run verify` reassembles & scans multi-part `.gz.partNN` archives before push.
+- **Zero Git LFS Required:** Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and auto-chunks archives above `40 MB`.
+- **Silent OS Startup Auto-Sync Daemon (`bun run autostart`) + 1-Click Launcher (`bun run shortcut`):** Runs silently in the background on Windows/macOS/Linux login (0 console flash, immune to `Reload Window` / `Server Restart`) — auto-restores on boot while Antigravity is closed, and auto-syncs after **3 min idle**, every **15 min of active work**, and on **exit** regardless of how you open Antigravity!
+- **Zero-Terminal Playbooks:** Also includes drop-in Antigravity agent playbooks (`CHATS_SYNC.md` & `SETUP_SECOND_PC.md`) hidden via `.git/info/exclude` so your team code repo stays 100% clean.
 
 ---
 
-## 🔄 How Multi-Device Sync Works
+## How Multi-Device Sync Works
 
 ```mermaid
 flowchart LR
@@ -33,7 +33,7 @@ flowchart LR
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - [Bun](https://bun.sh/) (`>= 1.1`)
@@ -67,7 +67,7 @@ gh repo create your-github-username/my-project-chats --private --source=. --remo
 
 ---
 
-## ⚡ Daily Workflow (Across Any Number of Machines)
+## Daily Workflow (Across Any Number of Machines)
 
 ### 1. First Time on a Second Machine
 Send the generated `SETUP_SECOND_PC.md` file to Antigravity on the second machine — or run manually:
@@ -86,7 +86,7 @@ Then open Antigravity — all conversations will appear cleanly bound to your lo
 
 ---
 
-## ⚙️ Configuration & CLI Flags
+## Configuration & CLI Flags
 
 `sync.config.json`:
 
@@ -117,7 +117,7 @@ Useful CLI commands & flags:
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```text
 antigravity-chat-sync/
@@ -147,7 +147,7 @@ antigravity-chat-sync/
 
 ---
 
-## 📚 Deep-Dive Documentation
+## Deep-Dive Documentation
 
 - [**Architecture & SQLite Schema (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
 - [**Security & Binary Protobuf Redaction (`docs/SECURITY.md`)**](./docs/SECURITY.md)
