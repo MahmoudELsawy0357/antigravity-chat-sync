@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 848 208" width="100%" role="img" aria-label="antigravity-chat-sync — By Mahmoud Elsawy">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 848 208" width="100%" role="img" aria-label="chatsync — By Mahmoud Elsawy">
   <defs>
     <pattern id="grid-dark" width="36" height="36" patternUnits="userSpaceOnUse" x="24.5" y="16.5">
       <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#21262d" stroke-width="1" />
@@ -76,23 +76,23 @@
     <text x="25" y="15.5" class="mono" font-size="10.5" fill="#8b949e">OPEN SOURCE · MAHMOUD ELSAWY</text>
   </g>
 
-  <text x="176" y="106" class="mono" font-size="26" font-weight="700" fill="#f0f6fc" letter-spacing="-0.6">antigravity-chat-sync</text>
+  <text x="176" y="106" class="mono" font-size="30" font-weight="700" fill="#f0f6fc" letter-spacing="-0.6">chatsync</text>
   <text x="176" y="135" class="sans" font-size="13.5" fill="#8b949e">
-    Multi-agent AI session archiver, sync engine &amp; cross-agent handoff.
+    Universal AI session bridge (1 PC zero-GitHub) &amp; multi-device archiver.
   </text>
   <text x="176" y="157" class="sans" font-size="12.5" fill="#6e7681">
-    Antigravity · Claude Code · Codex · Cursor — zero LFS &amp; byte-safe redaction.
+    Antigravity · Claude · Codex · Cursor · Windsurf · Copilot · Cline · Any Agent.
   </text>
 
   <!-- Vertical Blueprint Divider -->
   <line x1="618.5" y1="42" x2="618.5" y2="166" stroke="#21262d" stroke-width="1" />
 
   <!-- Right Telemetry Column -->
-  <text x="644" y="56" class="mono" font-size="10.5" fill="#6e7681" letter-spacing="1">TOOLKIT · V2.0</text>
+  <text x="644" y="56" class="mono" font-size="10.5" fill="#6e7681" letter-spacing="1">TOOLKIT · V3.0</text>
 
-  <text x="644" y="96" class="sans" font-size="21" font-weight="700" fill="#f0f6fc" letter-spacing="-0.4">4 Agents</text>
-  <text x="644" y="113" class="mono" font-size="10" fill="#8b949e" letter-spacing="0.4">AGY · CLAUDE · CODEX · CURSOR</text>
+  <text x="644" y="96" class="sans" font-size="21" font-weight="700" fill="#f0f6fc" letter-spacing="-0.4">Any Agent</text>
+  <text x="644" y="113" class="mono" font-size="10" fill="#8b949e" letter-spacing="0.4">1-PC LOCAL BRIDGE + CLOUD</text>
 
-  <text x="644" y="146" class="mono" font-size="19" font-weight="700" fill="#f0f6fc" letter-spacing="-0.4">/chat-sync</text>
-  <text x="644" y="163" class="mono" font-size="10" fill="#6e7681" letter-spacing="0.4">UNIFIED SKILL + HANDOFF</text>
+  <text x="644" y="146" class="mono" font-size="19" font-weight="700" fill="#f0f6fc" letter-spacing="-0.4">/chatsync</text>
+  <text x="644" y="163" class="mono" font-size="10" fill="#6e7681" letter-spacing="0.4">1-LINE GLOBAL INSTALL</text>
 </svg>

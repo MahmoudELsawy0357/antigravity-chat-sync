@@ -38,7 +38,8 @@ export function getAllArgValues(flag: string): string[] {
 }
 
 export function loadConfig(): SyncConfig {
-  const cfgPath = join(REPO_ROOT, 'sync.config.json')
+  const cwdCfgPath = join(process.cwd(), 'sync.config.json')
+  const cfgPath = existsSync(cwdCfgPath) ? cwdCfgPath : join(REPO_ROOT, 'sync.config.json')
   let fileCfg: Partial<SyncConfig> = {}
   if (existsSync(cfgPath)) {
     fileCfg = JSON.parse(readFileSync(cfgPath, 'utf8'))

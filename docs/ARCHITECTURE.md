@@ -1,6 +1,6 @@
-# Internal Architecture & Antigravity Storage Schema
+# Internal Architecture & Universal AI Storage Schemas
 
-Understanding how **Google Antigravity** stores conversations locally explains why naive file copying fails across machines and how `antigravity-chat-sync` achieves lossless two-way synchronization.
+Understanding how AI coding agents store conversations locally explains why naive file copying fails across machines and how `chatsync` achieves instant single-PC bridging and lossless two-way multi-PC synchronization.
 
 ---
 
@@ -73,3 +73,16 @@ In addition to Google Antigravity, `src/agents.ts` and `src/handoff.ts` implemen
 | **Cursor** | `Cursor/User/workspaceStorage/<hash>/workspace.json` + `state.vscdb` (`ItemTable`: `aichat.chatdata` & `composer.composerData`) | Exports `.ai-chats/*.md` per conversation plus `.cursor/rules/chat-sync-handoff.mdc` index, automatically hidden via `.git/info/exclude`. |
 
 To prevent mirror feedback loops (`8 chats -> 16 -> 32`), seeded mirror sessions embed a `[antigravity-chat-sync-mirror:<lineCount>]` marker: unmodified mirrors are skipped during `sync`, whereas any conversation where the user continues chatting inside Claude Code or Codex (`lines.length > seededLineCount`) is automatically captured and archived on the next sync pass.
+
+---
+
+## 6. Universal AI Agent Adapters & Single-PC Zero-GitHub Bridge (`v3.0`)
+
+`src/universal-agents.ts` and `src/local-bridge.ts` extend `chatsync` beyond the core 4 agents so **any AI agent** can participate — even on a **single PC with zero GitHub repo or `sync.config.json`**:
+
+- **GitHub Copilot Chat (VS Code):** Discovers `Code/User/workspaceStorage/<hash>/workspace.json` + `chatSessions/*.json` (`requests[].message.text` & `requests[].response[].value`).
+- **Cline & Roo Code:** Discovers `globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json` and `globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json` across VS Code, Cursor, and Windsurf, and materializes `.clinerules/chatsync-handoff.md`.
+- **Windsurf:** Materializes `.windsurf/rules/chatsync-handoff.md` and installs global Cascade rules in `~/.codeium/windsurf/memories/global_rules.md`.
+- **Gemini CLI & Aider:** Discovers `~/.gemini/tmp/*/chats/*.json` and `<workspace>/.aider.chat.history.md`.
+- **Universal Open Context Bridge (`.chatsync/`):** Generates git-excluded `.chatsync/latest.md` and `.chatsync/sessions/*.md` inside the workspace so **any** present or future AI coding agent (OpenCode, Zed, Devin, Web LLMs, custom MCP agents) can resume context immediately.
+

@@ -1,4 +1,8 @@
 node_modules/
+bun.lock*
+.chatsync/
+.ai-handoff.md
+.ai-chats/
 .tmp-sanitize/
 .DS_Store
 *.log

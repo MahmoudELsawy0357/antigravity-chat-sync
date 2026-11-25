@@ -4,8 +4,26 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { redactText } from './redact'
+import {
+  collectAiderSessions,
+  collectClineFamilySessions,
+  collectCopilotSessions,
+  collectGeminiCliSessions,
+} from './universal-agents'
 
-export type AgentKind = 'antigravity' | 'claude' | 'codex' | 'cursor'
+export type AgentKind =
+  | 'antigravity'
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'windsurf'
+  | 'copilot'
+  | 'cline'
+  | 'roocode'
+  | 'gemini'
+  | 'aider'
+  | 'opencode'
+  | 'universal'
 export type ExternalAgentKind = Exclude<AgentKind, 'antigravity'>
 
 export const AGENT_LABELS: Record<AgentKind, string> = {
@@ -13,6 +31,14 @@ export const AGENT_LABELS: Record<AgentKind, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  copilot: 'GitHub Copilot',
+  cline: 'Cline',
+  roocode: 'Roo Code',
+  gemini: 'Gemini CLI',
+  aider: 'Aider',
+  opencode: 'OpenCode',
+  universal: 'Universal AI',
 }
 
 const MIRROR_MARKER = '[antigravity-chat-sync-mirror:'
@@ -32,7 +58,7 @@ export interface ExternalAgentSession {
   stepCount: number
   workspacePath?: string
   turns: NormalizedTurn[]
-  rawFormat: 'claude-jsonl' | 'codex-jsonl' | 'cursor-json'
+  rawFormat: string
   rawPayload: string
 }
 
@@ -560,15 +586,54 @@ export function collectAllExternalAgentSessions(opts: {
   projectSlug: string
   legacyProjectSlugs?: string[]
   excludedIds?: Set<string>
+  workspacePath?: string
   claudeDir?: string
   codexDir?: string
   cursorUserDir?: string
+  vsCodeUserDir?: string
+  geminiDir?: string
 }): ExternalAgentSession[] {
-  return [
+  const isCustomSandbox = Boolean(opts.claudeDir || opts.codexDir || opts.cursorUserDir)
+  const base = [
     ...collectClaudeSessions(opts),
     ...collectCodexSessions(opts),
     ...collectCursorSessions(opts),
   ]
+  if (isCustomSandbox && !opts.vsCodeUserDir && !opts.geminiDir && !opts.workspacePath) {
+    return base
+  }
+  const extra = [
+    ...collectCopilotSessions({
+      projectSlug: opts.projectSlug,
+      legacyProjectSlugs: opts.legacyProjectSlugs,
+      vsCodeUserDir: opts.vsCodeUserDir,
+    }),
+    ...collectClineFamilySessions({
+      projectSlug: opts.projectSlug,
+      legacyProjectSlugs: opts.legacyProjectSlugs,
+      ideUserDirs: opts.vsCodeUserDir ? [opts.vsCodeUserDir] : undefined,
+    }),
+    ...collectGeminiCliSessions({
+      projectSlug: opts.projectSlug,
+      legacyProjectSlugs: opts.legacyProjectSlugs,
+      geminiDir: opts.geminiDir,
+    }),
+    ...collectAiderSessions({
+      workspacePath: opts.workspacePath,
+      projectSlug: opts.projectSlug,
+    }),
+  ].map(s => ({
+    id: s.id,
+    agent: s.agent as ExternalAgentKind,
+    title: s.title,
+    updatedAt: s.updatedAt,
+    stepCount: s.stepCount,
+    workspacePath: s.workspacePath,
+    turns: s.turns,
+    rawFormat: s.rawFormat,
+    rawPayload: s.rawPayload,
+  }))
+  return [...base, ...extra]
 }
 
 export function writeExternalSessionMarkdown(opts: {

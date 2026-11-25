@@ -114,7 +114,7 @@ export async function runBootstrap(): Promise<void> {
     const prompter = createLinePrompter()
     try {
       console.log('\n┌────────────────────────────────────────────────────────────┐')
-      console.log('│  antigravity-chat-sync · Interactive Project Setup Wizard  │')
+      console.log('│      chatsync v3.0 · Multi-PC GitHub Archive Wizard        │')
       console.log('└────────────────────────────────────────────────────────────┘')
 
       if (!projectSlug) {
@@ -174,7 +174,7 @@ export async function runBootstrap(): Promise<void> {
       }
 
       const installPluginAns = (
-        await prompter.ask('Install global Antigravity /chat-sync plugin? [Y/n]: ')
+        await prompter.ask('Install global `chatsync` CLI & universal skill across all AI agents? [Y/n]: ')
       ).trim().toLowerCase()
       const enableAutostartAns = (
         await prompter.ask('Enable silent background auto-sync on OS login? [Y/n]: ')
@@ -200,7 +200,7 @@ export async function runBootstrap(): Promise<void> {
 
   if (!projectSlug || !archiveRepo) {
     console.log(
-      'Usage: bunx github:MahmoudELsawy0357/antigravity-chat-sync setup [--project <slug> --repo <owner/repo> --target <dir> --workspace <path> --push --autostart --install-plugin]',
+      'Usage: chatsync setup [--project <slug> --repo <owner/repo> --target <dir> --workspace <path> --push --autostart --install-plugin]',
     )
     process.exit(1)
   }

@@ -9,7 +9,7 @@ import {
   type ExternalAgentSession,
   writeExternalSessionMarkdown,
 } from './agents'
-import { getAntigravityDir, loadConfig, REPO_ROOT } from './config'
+import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import { slugify, writeConversationMarkdown } from './markdown-exporter'
 import { ARCHIVE_SCHEMA_REV, getActualConvDbStepCount } from './protobuf'
 import { redactBufferSameLength, redactText, sanitizeSqliteCopy } from './redact'
@@ -273,11 +273,16 @@ if (existsSync(summaryDbPath)) {
   } catch {}
 }
 
-// ── Part B: Claude Code, Codex & Cursor Sessions ─────────────────────────────
+// ── Part B: Universal External Agent Sessions (Claude, Codex, Cursor, Copilot, Cline, Roo, Gemini, Aider) ──
+const explicitSyncWs = getArgValue('--workspace')
+const siblingSyncWs = join(REPO_ROOT, '..', config.projectSlug)
+const syncWorkspacePath = explicitSyncWs ? explicitSyncWs : existsSync(siblingSyncWs) ? siblingSyncWs : undefined
+
 const localExternalSessions = collectAllExternalAgentSessions({
   projectSlug: config.projectSlug,
   legacyProjectSlugs: config.legacyProjectSlugs,
   excludedIds: excludedSet,
+  workspacePath: syncWorkspacePath,
 })
 const localExtByKey = new Map<string, ExternalAgentSession>()
 

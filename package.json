@@ -1,17 +1,20 @@
 {
-  "name": "antigravity-chat-sync",
-  "version": "2.1.2",
+  "name": "chatsync",
+  "version": "3.0.0",
   "type": "module",
   "license": "MIT",
-  "description": "Project-scoped multi-agent AI conversation archiver, sync engine, and cross-agent session handoff bridge for Antigravity, Claude Code, Codex, and Cursor.",
+  "description": "Universal AI session bridge & multi-device conversation archiver across ANY AI coding agent (Antigravity, Claude Code, Codex, Cursor, Windsurf, Copilot, Cline, Roo Code, Gemini CLI, Aider & more) — locally on 1 PC or across multiple PCs via GitHub.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MahmoudELsawy0357/antigravity-chat-sync.git"
+    "url": "https://github.com/MahmoudELsawy0357/chatsync.git"
   },
   "bin": {
+    "chatsync": "./src/cli.ts",
     "antigravity-chat-sync": "./src/cli.ts"
   },
   "scripts": {
+    "install:global": "bun run src/plugin-install.ts",
+    "bridge": "bun run src/local-bridge.ts",
     "setup": "bun run src/bootstrap.ts",
     "init": "bun run src/init.ts",
     "sync": "bun run src/sync.ts",

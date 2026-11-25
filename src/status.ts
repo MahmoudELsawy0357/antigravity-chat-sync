@@ -2,16 +2,9 @@ import { Database } from 'bun:sqlite'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
-import {
-  AGENT_LABELS,
-  type AgentKind,
-  collectAllExternalAgentSessions,
-  getClaudeDir,
-  getCodexDir,
-  getCursorUserDir,
-} from './agents'
-import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
+import { basename, join, resolve } from 'node:path'
+import { AGENT_LABELS, type AgentKind, collectAllExternalAgentSessions } from './agents'
+import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT, type SyncConfig } from './config'
 import {
   detectLocalProjectId,
   getActualConvDbStepCount,
@@ -21,29 +14,78 @@ import {
   parseProtoFields,
   toWorkspaceUris,
 } from './protobuf'
+import { findRegisteredProject } from './registry'
+import { detectAllInstalledAgentLabels } from './universal-agents'
 
-const config = loadConfig()
-const agyDir = getAntigravityDir()
 const explicitWs = getArgValue('--workspace')
+const explicitProject = getArgValue('--project')
+const explicitDir = getArgValue('--dir')
+
+let archiveDir: string | null = null
+if (explicitDir && existsSync(join(resolve(explicitDir), 'sync.config.json'))) {
+  archiveDir = resolve(explicitDir)
+} else if (existsSync(join(process.cwd(), 'sync.config.json'))) {
+  archiveDir = process.cwd()
+} else if (existsSync(join(REPO_ROOT, 'sync.config.json'))) {
+  archiveDir = REPO_ROOT
+} else {
+  const lookup = explicitProject || explicitWs || process.cwd()
+  const reg = findRegisteredProject(lookup)
+  if (reg && existsSync(join(reg.archiveDir, 'sync.config.json'))) {
+    archiveDir = reg.archiveDir
+  }
+}
+
+let config: SyncConfig
+if (archiveDir) {
+  process.chdir(archiveDir)
+  config = loadConfig()
+} else {
+  const inferredWs = explicitWs ? resolve(explicitWs) : process.cwd()
+  const inferredSlug = explicitProject || basename(inferredWs)
+  config = {
+    projectSlug: inferredSlug,
+    projectDisplayName: inferredSlug,
+    legacyProjectSlugs: [],
+    archiveRepo: '',
+    maxChunkMB: 45,
+    maxMarkdownPartKB: 350,
+    excludedConversationIds: [],
+    extraConversationIds: [],
+  }
+}
+
+const agyDir = getAntigravityDir()
 let targetWorkspacePath: string | null = explicitWs ? resolve(explicitWs) : null
 if (!targetWorkspacePath) {
-  const sibling = resolve(REPO_ROOT, '..', config.projectSlug)
-  if (existsSync(sibling)) targetWorkspacePath = sibling
+  if (archiveDir) {
+    const reg = findRegisteredProject(config.projectSlug)
+    const sibling = resolve(archiveDir, '..', config.projectSlug)
+    if (reg?.workspacePath && existsSync(reg.workspacePath)) {
+      targetWorkspacePath = reg.workspacePath
+    } else if (existsSync(sibling)) {
+      targetWorkspacePath = sibling
+    }
+  } else if (existsSync(process.cwd())) {
+    targetWorkspacePath = process.cwd()
+  }
 }
 
 const targetUris = targetWorkspacePath ? toWorkspaceUris(targetWorkspacePath) : null
 const localProjectId = existsSync(agyDir) ? detectLocalProjectId(agyDir, targetUris) : null
 const lsRunning = isLanguageServerRunning()
+const detectedAgents = detectAllInstalledAgentLabels()
 
-const detectedAgents: string[] = []
-if (existsSync(agyDir)) detectedAgents.push('Antigravity')
-if (existsSync(getClaudeDir())) detectedAgents.push('Claude Code')
-if (existsSync(getCodexDir())) detectedAgents.push('Codex')
-if (existsSync(getCursorUserDir())) detectedAgents.push('Cursor')
-
-console.log(`\n🩺 Universal AI Chat Sync Status — "${config.projectDisplayName}" (${config.projectSlug})`)
-console.log('─'.repeat(80))
+console.log(`\n🩺 chatsync v3.0 Status — "${config.projectDisplayName}" (${config.projectSlug})`)
+console.log('─'.repeat(82))
 console.log(`📁 Workspace Path   : ${targetWorkspacePath ?? '⚠️ Not found (pass --workspace <path>)'}`)
+console.log(
+  `🔄 Operating Mode   : ${
+    archiveDir
+      ? `☁️ Multi-PC GitHub Archive (${config.archiveRepo || archiveDir})`
+      : '⚡ Single-PC Local Bridge Mode (zero GitHub needed — run `chatsync bridge`!)'
+  }`,
+)
 console.log(`🧩 Installed Agents : ${detectedAgents.length > 0 ? detectedAgents.join(' · ') : 'None detected'}`)
 if (existsSync(agyDir)) {
   console.log(
@@ -56,40 +98,42 @@ if (existsSync(agyDir)) {
   console.log(`⚙️ Antigravity LS   : ${lsRunning ? '🟡 Running (close before restore or use --wait)' : '🟢 Stopped (safe to restore)'}`)
 }
 
-const safeSlug = config.projectSlug.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'project'
-let startupPath = ''
-if (process.platform === 'win32') {
-  const sq = spawnSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Startup')"], {
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  const sDir =
-    String(sq.stdout || '').trim() ||
-    join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
-  startupPath = join(sDir, `antigravity-chatsync-${safeSlug}.vbs`)
-} else if (process.platform === 'darwin') {
-  startupPath = join(homedir(), 'Library', 'LaunchAgents', `com.antigravity.chatsync.${safeSlug}.plist`)
-} else {
-  startupPath = join(homedir(), '.config', 'autostart', `antigravity-chatsync-${safeSlug}.desktop`)
-}
+if (archiveDir) {
+  const safeSlug = config.projectSlug.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'project'
+  let startupPath = ''
+  if (process.platform === 'win32') {
+    const sq = spawnSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Startup')"], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    const sDir =
+      String(sq.stdout || '').trim() ||
+      join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+    startupPath = join(sDir, `antigravity-chatsync-${safeSlug}.vbs`)
+  } else if (process.platform === 'darwin') {
+    startupPath = join(homedir(), 'Library', 'LaunchAgents', `com.antigravity.chatsync.${safeSlug}.plist`)
+  } else {
+    startupPath = join(homedir(), '.config', 'autostart', `antigravity-chatsync-${safeSlug}.desktop`)
+  }
 
-const lockPath = join(REPO_ROOT, '.daemon.lock')
-let daemonPid: number | null = null
-if (existsSync(lockPath)) {
-  try {
-    const info = JSON.parse(readFileSync(lockPath, 'utf8'))
-    if (info?.pid && isPidAlive(Number(info.pid))) daemonPid = Number(info.pid)
-  } catch {}
-}
-const startupEnabled = existsSync(startupPath)
-console.log(
-  `🤖 Auto-Sync Daemon : ${daemonPid ? `🟢 Running (PID ${daemonPid})` : '⚪ Stopped (run \`bun run autostart\`)'} | OS Autostart: ${startupEnabled ? '✅ Enabled' : '⚪ Not installed'}`,
-)
-const daemonLogPath = join(REPO_ROOT, '.daemon.log')
-if (existsSync(daemonLogPath)) {
-  const lines = readFileSync(daemonLogPath, 'utf8').trim().split('\n').filter(Boolean)
-  const lastSyncLine = [...lines].reverse().find(l => l.includes('Auto-sync succeeded') || l.includes('Daemon started'))
-  if (lastSyncLine) console.log(`🕒 Last Watcher Log : ${lastSyncLine}`)
+  const lockPath = join(archiveDir, '.daemon.lock')
+  let daemonPid: number | null = null
+  if (existsSync(lockPath)) {
+    try {
+      const info = JSON.parse(readFileSync(lockPath, 'utf8'))
+      if (info?.pid && isPidAlive(Number(info.pid))) daemonPid = Number(info.pid)
+    } catch {}
+  }
+  const startupEnabled = existsSync(startupPath)
+  console.log(
+    `🤖 Auto-Sync Daemon : ${daemonPid ? `🟢 Running (PID ${daemonPid})` : '⚪ Stopped (run `chatsync autostart`)'} | OS Autostart: ${startupEnabled ? '✅ Enabled' : '⚪ Not installed'}`,
+  )
+  const daemonLogPath = join(archiveDir, '.daemon.log')
+  if (existsSync(daemonLogPath)) {
+    const lines = readFileSync(daemonLogPath, 'utf8').trim().split('\n').filter(Boolean)
+    const lastSyncLine = [...lines].reverse().find(l => l.includes('Auto-sync succeeded') || l.includes('Daemon started'))
+    if (lastSyncLine) console.log(`🕒 Last Watcher Log : ${lastSyncLine}`)
+  }
 }
 
 const slugLower = config.projectSlug.toLowerCase()
@@ -109,21 +153,23 @@ interface StatusEntry {
 
 const statusMap = new Map<string, StatusEntry>()
 
-// 1. Archive Antigravity summaries
-const summariesPath = join(REPO_ROOT, 'antigravity-backup', 'summaries.json')
-if (existsSync(summariesPath)) {
-  const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
-  for (const s of summaries || []) {
-    if (s.parent_conversation_id) continue
-    const key = `antigravity:${s.conversation_id}`
-    statusMap.set(key, {
-      key,
-      id: s.conversation_id,
-      agent: 'antigravity',
-      title: s.title || s.preview || '(untitled)',
-      localSteps: null,
-      archiveSteps: s.step_count ?? 0,
-    })
+// 1. Archive Antigravity summaries (if archive exists)
+if (archiveDir) {
+  const summariesPath = join(archiveDir, 'antigravity-backup', 'summaries.json')
+  if (existsSync(summariesPath)) {
+    const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+    for (const s of summaries || []) {
+      if (s.parent_conversation_id) continue
+      const key = `antigravity:${s.conversation_id}`
+      statusMap.set(key, {
+        key,
+        id: s.conversation_id,
+        agent: 'antigravity',
+        title: s.title || s.preview || '(untitled)',
+        localSteps: null,
+        archiveSteps: s.step_count ?? 0,
+      })
+    }
   }
 }
 
@@ -168,30 +214,33 @@ if (existsSync(summaryDbPath)) {
   }
 }
 
-// 3. Archive External Agents (Claude, Codex, Cursor)
-const extManifestPath = join(REPO_ROOT, 'agent-backups', 'manifest.json')
-if (existsSync(extManifestPath)) {
-  try {
-    const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
-    for (const s of extManifest.sessions || []) {
-      const key = `${s.agent}:${s.id}`
-      statusMap.set(key, {
-        key,
-        id: s.id,
-        agent: s.agent,
-        title: s.title || '(untitled)',
-        localSteps: null,
-        archiveSteps: s.stepCount ?? 0,
-      })
-    }
-  } catch {}
+// 3. Archive External Agents (if archive exists)
+if (archiveDir) {
+  const extManifestPath = join(archiveDir, 'agent-backups', 'manifest.json')
+  if (existsSync(extManifestPath)) {
+    try {
+      const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
+      for (const s of extManifest.sessions || []) {
+        const key = `${s.agent}:${s.id}`
+        statusMap.set(key, {
+          key,
+          id: s.id,
+          agent: s.agent,
+          title: s.title || '(untitled)',
+          localSteps: null,
+          archiveSteps: s.stepCount ?? 0,
+        })
+      }
+    } catch {}
+  }
 }
 
-// 4. Local External Agents (Claude, Codex, Cursor)
+// 4. Local Universal External Agents (Claude, Codex, Cursor, Copilot, Cline, Roo, Gemini, Aider)
 const localExternals = collectAllExternalAgentSessions({
   projectSlug: config.projectSlug,
   legacyProjectSlugs: config.legacyProjectSlugs,
   excludedIds: excludedSet,
+  workspacePath: targetWorkspacePath ?? undefined,
 })
 for (const ext of localExternals) {
   const key = `${ext.agent}:${ext.id}`
@@ -244,18 +293,20 @@ for (const entry of statusMap.values()) {
   const hasArc = entry.archiveSteps !== null
 
   let status = '✅ Synced'
-  if (hasLoc && !hasArc) {
-    status = '🆕 Local only (run sync)'
+  if (!archiveDir) {
+    status = '⚡ Ready to bridge (`chatsync bridge`)'
+  } else if (hasLoc && !hasArc) {
+    status = '🆕 Local only (run `chatsync sync`)'
     needPush++
   } else if (!hasLoc && hasArc) {
-    status = '☁️ Archive only (run restore / handoff)'
+    status = '☁️ Archive only (run `chatsync restore`)'
     needPull++
   } else if (hasLoc && hasArc) {
     if (entry.localSteps! > entry.archiveSteps!) {
-      status = '⬆️ Local newer (run sync)'
+      status = '⬆️ Local newer (run `chatsync sync`)'
       needPush++
     } else if (entry.localSteps! < entry.archiveSteps!) {
-      status = '⬇️ Archive newer (run restore)'
+      status = '⬇️ Archive newer (run `chatsync restore`)'
       needPull++
     }
     if (entry.isForeignProj) {
@@ -264,26 +315,33 @@ for (const entry of statusMap.values()) {
   }
 
   tableData.push({
-    Agent: AGENT_LABELS[entry.agent],
+    Agent: AGENT_LABELS[entry.agent] || entry.agent,
     ID: entry.id.slice(0, 8),
     Title: entry.title.slice(0, 34),
     Local: hasLoc ? entry.localSteps! : '—',
-    Archive: hasArc ? entry.archiveSteps! : '—',
+    Archive: archiveDir ? (hasArc ? entry.archiveSteps! : '—') : '— (local)',
     Status: status,
   })
 }
 
 console.log('')
 if (tableData.length === 0) {
-  console.log('ℹ️ No conversations found locally or in the archive for this project yet.')
+  console.log('ℹ️ No conversations found locally for this project yet.')
 } else {
   console.table(tableData)
 }
 
-console.log(`📊 Summary: ${statusMap.size} session(s) across agents | Push needed: ${needPush} | Restore needed: ${needPull}`)
+if (archiveDir) {
+  console.log(`📊 Summary: ${statusMap.size} session(s) across agents | Push needed: ${needPush} | Restore needed: ${needPull}`)
+} else {
+  console.log(`📊 Summary: ${statusMap.size} live local session(s) detected across your AI agents!`)
+  console.log(`💡 Single-PC Bridge : \`chatsync bridge\` (links all agents) or \`chatsync to claude|codex|cursor|windsurf|cline|copilot\``)
+  console.log(`💡 Multi-PC Backup  : \`chatsync setup\` (optional — only if you want private GitHub sync across 2+ PCs)`)
+}
+
 if (foreignProjCount > 0 || agyhubForeignCount > 0) {
   console.log(
-    `⚠️ Health check: Found ${foreignProjCount} SQLite row(s) and ${agyhubForeignCount} agyhub entry(s) with foreign/missing project_id. Run \`bun run restore --wait\` to rebind them.`,
+    `⚠️ Health check: Found ${foreignProjCount} SQLite row(s) and ${agyhubForeignCount} agyhub entry(s) with foreign/missing project_id. Run \`chatsync restore --wait\` to rebind them.`,
   )
 } else {
   console.log('✅ Health check: All local project bindings look healthy!')

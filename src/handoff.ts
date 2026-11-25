@@ -364,6 +364,47 @@ export async function executeHandoff(opts: {
     }
   }
 
+  if (
+    opts.targetAgent === 'windsurf' ||
+    opts.targetAgent === 'cline' ||
+    opts.targetAgent === 'roocode' ||
+    opts.targetAgent === 'copilot' ||
+    opts.targetAgent === 'gemini' ||
+    opts.targetAgent === 'aider' ||
+    opts.targetAgent === 'opencode' ||
+    opts.targetAgent === 'universal'
+  ) {
+    const { writeUniversalWorkspaceContext, UNIVERSAL_AGENT_LABELS } = await import('./universal-agents')
+    const sessionsPayload = selected.map(src => ({
+      id: src.id,
+      agentLabel: AGENT_LABELS[src.agent] || src.agent,
+      title: src.title,
+      updatedAt: src.updatedAt,
+      turns: extractTurnsFromArchivedConversation(src),
+    }))
+    const uRes = writeUniversalWorkspaceContext({
+      workspacePath: opts.workspacePath,
+      projectSlug: opts.projectSlug,
+      targetAgent: opts.targetAgent,
+      sessions: sessionsPayload,
+    })
+    for (const sp of sessionsPayload) {
+      items.push({
+        sourceId: sp.id,
+        title: sp.title,
+        sourceAgent: opts.targetAgent,
+        turnsSynced: sp.turns.length,
+      })
+    }
+    return {
+      target: UNIVERSAL_AGENT_LABELS[opts.targetAgent] || opts.targetAgent,
+      syncedCount: items.length,
+      location: uRes.location,
+      resumeHint: uRes.resumeHint,
+      items,
+    }
+  }
+
   const picked = selected[selected.length - 1]
   const brief = buildHandoffBrief({ projectSlug: opts.projectSlug, source: picked })
 
@@ -421,24 +462,70 @@ export async function executeHandoff(opts: {
 if (import.meta.main) {
   const dirFlag = getArgValue('--dir')
   const projFlag = getArgValue('--project')
+  const wsFlag = getArgValue('--workspace')
+  const toRaw = (getArgValue('--to') || 'all').toLowerCase()
+
   let archiveRoot = REPO_ROOT
   if (dirFlag) {
     archiveRoot = resolve(dirFlag)
   } else if (projFlag) {
     const reg = findRegisteredProject(projFlag)
     if (reg) archiveRoot = reg.archiveDir
+  } else if (existsSync(join(process.cwd(), 'sync.config.json'))) {
+    archiveRoot = process.cwd()
+  } else {
+    const regFromCwd = findRegisteredProject(wsFlag || process.cwd())
+    if (regFromCwd) archiveRoot = regFromCwd.archiveDir
+  }
+
+  const hasArchive =
+    existsSync(join(archiveRoot, 'sync.config.json')) &&
+    existsSync(join(archiveRoot, 'conversations'))
+
+  // Single-PC Zero-GitHub Fallback: if no archive repo exists yet, bridge directly from local AI agents!
+  if (!hasArchive || toRaw === 'all') {
+    const { executeLocalBridge } = await import('./local-bridge')
+    const workspacePath = wsFlag ? resolve(wsFlag) : process.cwd()
+    const res = executeLocalBridge({
+      workspacePath,
+      projectSlug: projFlag || basename(workspacePath),
+      targetAgent: toRaw,
+      fromAgent: getArgValue('--from'),
+      sessionId: getArgValue('--id') || getArgValue('--from-id'),
+      latestOnly: process.argv.includes('--latest'),
+    })
+    console.log(
+      `\n⚡ Direct Local AI Bridge -> "${res.projectSlug}" (${res.sourceSessionsCount} session(s) bridged with zero GitHub needed!)`,
+    )
+    console.log('─'.repeat(78))
+    for (const b of res.bridgedTargets) {
+      console.log(`  ✓ ${b.targetAgent.padEnd(28, ' ')} -> ${b.resumeHint}`)
+    }
+    console.log('─'.repeat(78) + '\n')
+    process.exit(0)
   }
 
   process.chdir(archiveRoot)
   const config = loadConfig()
-  const toRaw = (getArgValue('--to') || 'markdown').toLowerCase()
-  const validTargets = new Set(['antigravity', 'claude', 'codex', 'cursor', 'markdown'])
+  const validTargets = new Set([
+    'antigravity',
+    'claude',
+    'codex',
+    'cursor',
+    'windsurf',
+    'cline',
+    'roocode',
+    'copilot',
+    'gemini',
+    'aider',
+    'opencode',
+    'universal',
+    'markdown',
+  ])
   if (!validTargets.has(toRaw)) {
-    console.error(`Invalid --to target "${toRaw}". Choose one of: antigravity, claude, codex, cursor, markdown`)
+    console.error(`Invalid --to target "${toRaw}". Choose any supported agent or "all" / "universal".`)
     process.exit(1)
   }
-
-  const wsFlag = getArgValue('--workspace')
   const regEntry = findRegisteredProject(config.projectSlug)
   const siblingWs = resolve(archiveRoot, '..', config.projectSlug)
   const workspacePath = wsFlag

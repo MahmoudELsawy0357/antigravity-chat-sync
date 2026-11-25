@@ -22,22 +22,41 @@ export interface DiscoveredAgyProject {
   workspacePath: string
 }
 
+export function getChatsyncHomeDir(): string {
+  return process.env.CHATSYNC_HOME || join(homedir(), '.chatsync')
+}
+
 export function getRegistryPath(): string {
-  return process.env.AGY_SYNC_REGISTRY || join(homedir(), '.gemini', 'antigravity-chat-sync', 'registry.json')
+  if (process.env.CHATSYNC_REGISTRY) return process.env.CHATSYNC_REGISTRY
+  if (process.env.AGY_SYNC_REGISTRY) return process.env.AGY_SYNC_REGISTRY
+  return join(getChatsyncHomeDir(), 'registry.json')
 }
 
 export function loadRegistry(): SyncRegistry {
   const regPath = getRegistryPath()
-  if (!existsSync(regPath)) {
-    return { version: 1, projects: {} }
+  const legacyPath = join(homedir(), '.gemini', 'antigravity-chat-sync', 'registry.json')
+
+  const merged: Record<string, RegisteredProject> = {}
+  // Seamlessly inherit legacy v2 registry entries if present
+  if (!process.env.CHATSYNC_REGISTRY && !process.env.AGY_SYNC_REGISTRY && existsSync(legacyPath)) {
+    try {
+      const leg = JSON.parse(readFileSync(legacyPath, 'utf8'))
+      if (leg && typeof leg.projects === 'object') {
+        Object.assign(merged, leg.projects)
+      }
+    } catch {}
   }
-  try {
-    const parsed = JSON.parse(readFileSync(regPath, 'utf8'))
-    if (parsed && typeof parsed.projects === 'object') {
-      return { version: 1, projects: parsed.projects }
-    }
-  } catch {}
-  return { version: 1, projects: {} }
+
+  if (existsSync(regPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(regPath, 'utf8'))
+      if (parsed && typeof parsed.projects === 'object') {
+        Object.assign(merged, parsed.projects)
+      }
+    } catch {}
+  }
+
+  return { version: 1, projects: merged }
 }
 
 export function saveRegistry(reg: SyncRegistry): void {
@@ -107,12 +126,12 @@ export function discoverLocalProjectsFromAntigravity(): DiscoveredAgyProject[] {
     try {
       const fullPath = join(configProjectsDir, file)
       const json = JSON.parse(readFileSync(fullPath, 'utf8'))
-      const projectId = json.projectId || file.replace(/\.json$/, '')
+      const projectId = json.projectId || json.id || file.replace(/\.json$/, '')
       const resources = json?.projectResources?.resources
       if (!Array.isArray(resources)) continue
 
       for (const res of resources) {
-        const uri = res?.gitFolder?.folderUri || res?.folderUri
+        const uri = res?.gitFolder?.folderUri || res?.folder?.folderUri || res?.folderUri
         if (!uri || typeof uri !== 'string') continue
         const localPath = fileUriToLocalPath(uri)
         if (!localPath || !existsSync(localPath)) continue

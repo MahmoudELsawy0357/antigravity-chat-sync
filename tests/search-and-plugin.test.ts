@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from '../src/config'
+import { executeLocalBridge } from '../src/local-bridge'
 import { installGlobalPlugin, uninstallGlobalPlugin } from '../src/plugin-install'
 import { findRegisteredProject, registerProject } from '../src/registry'
 import { searchArchiveDirectory } from '../src/search'
@@ -20,9 +21,9 @@ const ALLOWED_PLUGIN_KEYS = new Set([
   'disabled',
 ])
 
-describe('archive full-text search, project registry & native Antigravity plugin', () => {
+describe('archive full-text search, project registry, universal installer & single-PC local bridge', () => {
   test('searchArchiveDirectory finds matching conversations and extracts conversation:// UUIDs', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'agy-search-test-'))
+    const tmp = mkdtempSync(join(tmpdir(), 'chatsync-search-test-'))
     try {
       const convDir = join(tmp, 'conversations', '01-2026-11-25-auth-refactor')
       mkdirSync(convDir, { recursive: true })
@@ -51,9 +52,9 @@ describe('archive full-text search, project registry & native Antigravity plugin
   })
 
   test('registerProject and findRegisteredProject resolve by slug and workspace path', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'agy-reg-test-'))
-    const prevEnv = process.env.AGY_SYNC_REGISTRY
-    process.env.AGY_SYNC_REGISTRY = join(tmp, 'registry.json')
+    const tmp = mkdtempSync(join(tmpdir(), 'chatsync-reg-test-'))
+    const prevEnv = process.env.CHATSYNC_REGISTRY
+    process.env.CHATSYNC_REGISTRY = join(tmp, 'registry.json')
     try {
       const wsDir = join(tmp, 'demo-app')
       const arcDir = join(tmp, 'demo-app-chats')
@@ -71,57 +72,171 @@ describe('archive full-text search, project registry & native Antigravity plugin
       expect(findRegisteredProject('demo-app')?.archiveRepo).toBe('octocat/demo-app-chats')
       expect(findRegisteredProject(wsDir)?.projectSlug).toBe('demo-app')
     } finally {
-      if (prevEnv === undefined) delete process.env.AGY_SYNC_REGISTRY
-      else process.env.AGY_SYNC_REGISTRY = prevEnv
+      if (prevEnv === undefined) delete process.env.CHATSYNC_REGISTRY
+      else process.env.CHATSYNC_REGISTRY = prevEnv
       rmSync(tmp, { recursive: true, force: true })
     }
   })
 
-  test('plugin bundle conforms strictly to Antigravity plugin.json & SKILL.md specifications', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'agy-plugin-test-'))
-    const prevPlugins = process.env.AGY_PLUGINS_DIR
-    const prevReg = process.env.AGY_SYNC_REGISTRY
-    const prevClaude = process.env.CLAUDE_CONFIG_DIR
-    const prevCodex = process.env.CODEX_HOME
+  test('one-line installer conforms strictly to Antigravity plugin.json & installs CLI + universal skills', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'chatsync-plugin-test-'))
+    const envKeys = [
+      'CHATSYNC_HOME',
+      'CHATSYNC_BIN_DIR',
+      'CHATSYNC_REGISTRY',
+      'AGY_PLUGINS_DIR',
+      'CLAUDE_CONFIG_DIR',
+      'CODEX_HOME',
+      'GEMINI_CLI_HOME',
+      'WINDSURF_CODEIUM_DIR',
+      'CLINE_RULES_DIR',
+    ] as const
+    const prevEnv: Record<string, string | undefined> = {}
+    for (const k of envKeys) prevEnv[k] = process.env[k]
+
+    process.env.CHATSYNC_HOME = join(tmp, 'chatsync-home')
+    process.env.CHATSYNC_BIN_DIR = join(tmp, 'bin')
+    process.env.CHATSYNC_REGISTRY = join(tmp, 'chatsync-home', 'registry.json')
     process.env.AGY_PLUGINS_DIR = join(tmp, 'plugins')
-    process.env.AGY_SYNC_REGISTRY = join(tmp, 'registry.json')
     process.env.CLAUDE_CONFIG_DIR = join(tmp, 'claude')
     process.env.CODEX_HOME = join(tmp, 'codex')
+    process.env.GEMINI_CLI_HOME = join(tmp, 'gemini')
+    process.env.WINDSURF_CODEIUM_DIR = join(tmp, 'windsurf')
+    process.env.CLINE_RULES_DIR = join(tmp, 'cline', 'Rules')
+
     mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true })
     mkdirSync(process.env.CODEX_HOME, { recursive: true })
+    mkdirSync(process.env.GEMINI_CLI_HOME, { recursive: true })
+    mkdirSync(process.env.WINDSURF_CODEIUM_DIR, { recursive: true })
+    mkdirSync(join(tmp, 'cline'), { recursive: true })
 
     try {
       const report = installGlobalPlugin(REPO_ROOT)
       const installedDir = report.antigravityPluginDir
+      expect(existsSync(report.cliBinPath)).toBe(true)
       expect(existsSync(join(installedDir, 'plugin.json'))).toBe(true)
       expect(report.claudeSkillDir && existsSync(join(report.claudeSkillDir, 'SKILL.md'))).toBe(true)
       expect(report.codexSkillDir && existsSync(join(report.codexSkillDir, 'SKILL.md'))).toBe(true)
+      expect(report.geminiCliSkillDir && existsSync(join(report.geminiCliSkillDir, 'SKILL.md'))).toBe(true)
+      expect(report.windsurfRulesFile && existsSync(report.windsurfRulesFile)).toBe(true)
+      expect(report.clineRulesFile && existsSync(report.clineRulesFile)).toBe(true)
 
       const manifest = JSON.parse(readFileSync(join(installedDir, 'plugin.json'), 'utf8'))
       for (const key of Object.keys(manifest)) {
         expect(ALLOWED_PLUGIN_KEYS.has(key)).toBe(true)
       }
-      expect(manifest.name).toBe('antigravity-chat-sync')
+      expect(manifest.name).toBe('chatsync')
       expect(Array.isArray(manifest.suggestedPrompts)).toBe(true)
       expect(manifest.suggestedPrompts.length).toBeLessThanOrEqual(3)
       expect(existsSync(join(installedDir, manifest.logo))).toBe(true)
 
-      const skillMdPath = join(installedDir, 'skills', 'chat-sync', 'SKILL.md')
+      const skillMdPath = join(installedDir, 'skills', 'chatsync', 'SKILL.md')
       expect(existsSync(skillMdPath)).toBe(true)
       const skillContent = readFileSync(skillMdPath, 'utf8').replace(/\r\n/g, '\n')
-      expect(skillContent.startsWith('---\nname: chat-sync\n')).toBe(true)
+      expect(skillContent.startsWith('---\nname: chatsync\n')).toBe(true)
 
       expect(uninstallGlobalPlugin()).toBe(true)
       expect(existsSync(installedDir)).toBe(false)
+      expect(existsSync(report.cliBinPath)).toBe(false)
     } finally {
-      if (prevPlugins === undefined) delete process.env.AGY_PLUGINS_DIR
-      else process.env.AGY_PLUGINS_DIR = prevPlugins
-      if (prevReg === undefined) delete process.env.AGY_SYNC_REGISTRY
-      else process.env.AGY_SYNC_REGISTRY = prevReg
-      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR
-      else process.env.CLAUDE_CONFIG_DIR = prevClaude
-      if (prevCodex === undefined) delete process.env.CODEX_HOME
-      else process.env.CODEX_HOME = prevCodex
+      for (const k of envKeys) {
+        if (prevEnv[k] === undefined) delete process.env[k]
+        else process.env[k] = prevEnv[k]
+      }
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('single-PC zero-GitHub executeLocalBridge bridges Copilot, Cline & Aider into Claude, Windsurf & Universal .chatsync/', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'chatsync-bridge-test-'))
+    try {
+      const wsDir = join(tmp, 'orbit-api')
+      mkdirSync(join(wsDir, '.git', 'info'), { recursive: true })
+      writeFileSync(join(wsDir, '.git', 'info', 'exclude'), '# git exclude\n', 'utf8')
+
+      // 1. Seed a VS Code GitHub Copilot Chat session + Cline task
+      const vsCodeUserDir = join(tmp, 'vscode-user')
+      const wsHashDir = join(vsCodeUserDir, 'workspaceStorage', 'hash-orbit-1')
+      mkdirSync(join(wsHashDir, 'chatSessions'), { recursive: true })
+      writeFileSync(
+        join(wsHashDir, 'workspace.json'),
+        JSON.stringify({ folder: `file:///${wsDir.replace(/\\/g, '/')}` }),
+        'utf8',
+      )
+      writeFileSync(
+        join(wsHashDir, 'chatSessions', 'copilot-sess-1.json'),
+        JSON.stringify({
+          sessionId: 'copilot-sess-1',
+          customTitle: 'JWT Middleware Setup',
+          lastMessageDate: '2026-11-25T18:00:00.000Z',
+          requests: [
+            {
+              message: { text: 'Implement rate limiting on /auth/refresh' },
+              response: [{ value: 'Added sliding-window rate limiter middleware.' }],
+            },
+          ],
+        }),
+        'utf8',
+      )
+
+      const clineTaskDir = join(vsCodeUserDir, 'globalStorage', 'saoudrizwan.claude-dev', 'tasks', 'cline-task-99')
+      mkdirSync(clineTaskDir, { recursive: true })
+      writeFileSync(
+        join(clineTaskDir, 'ui_messages.json'),
+        JSON.stringify([
+          { type: 'say', say: 'task', text: 'Audit orbit-api Redis cache TTLs', ts: 1764094000000 },
+          { type: 'say', say: 'text', text: 'Updated orbit-api Redis TTL to 300s.', ts: 1764094010000 },
+        ]),
+        'utf8',
+      )
+
+      // 2. Seed an Aider session inside workspace
+      writeFileSync(
+        join(wsDir, '.aider.chat.history.md'),
+        [
+          '# aider chat started at 2026-11-25 19:00:00',
+          '#### Add healthz endpoint',
+          '',
+          'Created GET /healthz returning 200 OK.',
+        ].join('\n'),
+        'utf8',
+      )
+
+      const claudeDir = join(tmp, 'claude-home')
+      const codexDir = join(tmp, 'codex-home')
+      mkdirSync(claudeDir, { recursive: true })
+      mkdirSync(codexDir, { recursive: true })
+
+      // 3. Bridge across ALL agents on 1 PC with ZERO sync.config.json and ZERO GitHub!
+      const bridgeAll = executeLocalBridge({
+        workspacePath: wsDir,
+        targetAgent: 'all',
+        agyDir: join(tmp, 'empty-agy'),
+        claudeDir,
+        codexDir,
+        cursorUserDir: join(tmp, 'empty-cursor'),
+        vsCodeUserDir,
+        geminiDir: join(tmp, 'empty-gemini'),
+      })
+
+      expect(bridgeAll.sourceSessionsCount).toBe(3)
+      expect(existsSync(join(wsDir, '.chatsync', 'latest.md'))).toBe(true)
+      expect(readFileSync(join(wsDir, '.git', 'info', 'exclude'), 'utf8')).toContain('.chatsync/')
+
+      // 4. Bridge specifically to Windsurf
+      const bridgeWindsurf = executeLocalBridge({
+        workspacePath: wsDir,
+        targetAgent: 'windsurf',
+        agyDir: join(tmp, 'empty-agy'),
+        claudeDir,
+        codexDir,
+        cursorUserDir: join(tmp, 'empty-cursor'),
+        vsCodeUserDir,
+        geminiDir: join(tmp, 'empty-gemini'),
+      })
+      expect(bridgeWindsurf.bridgedTargets[0].targetAgent).toBe('Windsurf')
+      expect(existsSync(join(wsDir, '.windsurf', 'rules', 'chatsync-handoff.md'))).toBe(true)
+    } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
   })
