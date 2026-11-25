@@ -1,11 +1,11 @@
-# 🚀 One-Shot Second Machine Bootstrapper (`SETUP_SECOND_PC.md`)
+# One-Shot Second Machine Bootstrapper (`SETUP_SECOND_PC.md`)
 
 > **Immediate Execution Instructions for Antigravity AI:**
 > The user opened **`{{PROJECT_SLUG}}`** on a new machine. Execute all steps below immediately without asking the user to run manual commands.
 
 ---
 
-## 🤖 Step-by-Step Playbook
+## Step-by-Step Playbook
 
 1. **Verify `bun` & `gh` Auth (`{{GITHUB_USER}}`):**
    - Run `bun --version; gh auth status`.
