@@ -1,6 +1,6 @@
 {
   "name": "antigravity-chat-sync",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "type": "module",
   "license": "MIT",
   "description": "Project-scoped multi-agent AI conversation archiver, sync engine, and cross-agent session handoff bridge for Antigravity, Claude Code, Codex, and Cursor.",

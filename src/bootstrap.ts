@@ -240,7 +240,27 @@ interface ProvisionOptions {
 async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
   const { projectSlug, workspacePath, targetDir, archiveRepo, installPlugin, enableAutostart, pushRemote } = opts
 
+  const repoCheck = pushRemote
+    ? spawnSync('gh', ['repo', 'view', archiveRepo, '--json', 'name'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      })
+    : { status: 1 }
+  const remoteRepoExists = repoCheck.status === 0
+
+  // Case A: Joining an existing archive repo from another machine (Two-Way Merge!)
+  if (remoteRepoExists && !existsSync(join(targetDir, '.git'))) {
+    console.log(`\nDetected existing remote archive "${archiveRepo}" on GitHub — cloning for two-way merge...`)
+    mkdirSync(resolve(targetDir, '..'), { recursive: true })
+    if (process.platform === 'win32') {
+      spawnSync('git', ['config', '--global', 'http.sslBackend', 'schannel'], { windowsHide: true })
+    }
+    runStep('git', ['clone', `https://github.com/${archiveRepo}.git`, targetDir], process.cwd())
+  }
+
   mkdirSync(targetDir, { recursive: true })
+  const hadExistingConfig = existsSync(join(targetDir, 'sync.config.json'))
+
   if (resolve(targetDir) !== resolve(REPO_ROOT)) {
     for (const item of COPY_ITEMS) {
       const srcPath = join(REPO_ROOT, item)
@@ -257,15 +277,17 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
     }
   }
 
-  const initArgs = ['run', 'src/init.ts', '--project', projectSlug, '--repo', archiveRepo]
-  if (workspacePath && existsSync(resolve(workspacePath))) {
-    initArgs.push('--workspace', resolve(workspacePath))
+  if (!hadExistingConfig) {
+    const initArgs = ['run', 'src/init.ts', '--project', projectSlug, '--repo', archiveRepo]
+    if (workspacePath && existsSync(resolve(workspacePath))) {
+      initArgs.push('--workspace', resolve(workspacePath))
+    }
+    const excludeId = getArgValue('--exclude')
+    if (excludeId) {
+      initArgs.push('--exclude', excludeId)
+    }
+    runStep(process.execPath, initArgs, targetDir)
   }
-  const excludeId = getArgValue('--exclude')
-  if (excludeId) {
-    initArgs.push('--exclude', excludeId)
-  }
-  runStep(process.execPath, initArgs, targetDir)
 
   registerProject({
     projectSlug,
@@ -286,6 +308,15 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
     writeFileSync(join(targetDir, 'ARCHIVE_INDEX.md'), `# ${projectSlug} Conversation Archive\n`, 'utf8')
   }
 
+  // If joining an existing remote archive on a second machine: restore Machine 1's chats BEFORE syncing Machine 2's local chats!
+  if (remoteRepoExists) {
+    const restoreArgs = ['run', 'src/restore.ts']
+    if (workspacePath && existsSync(resolve(workspacePath))) {
+      restoreArgs.push('--workspace', resolve(workspacePath))
+    }
+    runStep(process.execPath, restoreArgs, targetDir)
+  }
+
   runStep(process.execPath, ['run', 'src/sync.ts', '--no-push'], targetDir)
   const verified = runStep(process.execPath, ['run', 'src/verify.ts'], targetDir)
   if (!verified) {
@@ -295,15 +326,9 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
 
   if (pushRemote) {
     runStep('git', ['add', '-A'], targetDir)
-    runStep('git', ['commit', '-m', `feat: initialize ${projectSlug} conversation archive`], targetDir)
+    runStep('git', ['commit', '-m', `chore: sync ${projectSlug} conversations`], targetDir)
 
-    const repoCheck = spawnSync('gh', ['repo', 'view', archiveRepo, '--json', 'name'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-    if (repoCheck.status === 0) {
-      runStep('git', ['remote', 'remove', 'origin'], targetDir)
-      runStep('git', ['remote', 'add', 'origin', `https://github.com/${archiveRepo}.git`], targetDir)
+    if (remoteRepoExists) {
       runStep('git', ['push', '-u', 'origin', 'main'], targetDir)
     } else {
       runStep(
