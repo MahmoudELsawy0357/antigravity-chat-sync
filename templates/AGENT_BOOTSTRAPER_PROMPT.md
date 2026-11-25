@@ -1,4 +1,4 @@
-# ⚡ One-Shot Agent Prompt (Drop into Antigravity on Any Project)
+# One-Shot Agent Prompt (Drop into Antigravity on Any Project)
 
 Copy the prompt below, replace `<YOUR_GITHUB_USERNAME>` and `<NEW_PRIVATE_REPO_NAME>`, and send it to **Google Antigravity** inside the project whose conversations you want to archive & sync:
 
