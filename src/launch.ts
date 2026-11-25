@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { collectAllExternalAgentSessions } from './agents'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import { getActualConvDbStepCount, isAntigravityRunning, isLanguageServerRunning } from './protobuf'
 
@@ -50,41 +51,51 @@ const excludedSet = new Set(config.excludedConversationIds)
 const extraSet = new Set(config.extraConversationIds)
 
 function getLocalProjectTotalSteps(): number {
+  let total = 0
   const summaryDbPath = join(agyDir, 'conversation_summaries.db')
-  if (!existsSync(summaryDbPath)) return 0
-  try {
-    const db = new Database(summaryDbPath, { readonly: true })
-    const topRows = db
-      .query("SELECT conversation_id, step_count, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = ''")
-      .all() as Array<{ conversation_id: string; step_count: number; workspace_uris: string }>
+  if (existsSync(summaryDbPath)) {
+    try {
+      const db = new Database(summaryDbPath, { readonly: true })
+      const topRows = db
+        .query("SELECT conversation_id, step_count, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = ''")
+        .all() as Array<{ conversation_id: string; step_count: number; workspace_uris: string }>
 
-    const matchedTopIds: string[] = []
-    let total = 0
-    for (const r of topRows) {
-      if (excludedSet.has(r.conversation_id)) continue
-      const ws = String(r.workspace_uris || '').toLowerCase()
-      if (extraSet.has(r.conversation_id) || ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))) {
-        matchedTopIds.push(r.conversation_id)
-        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${r.conversation_id}.db`))
-        total += Math.max(r.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+      const matchedTopIds: string[] = []
+      for (const r of topRows) {
+        if (excludedSet.has(r.conversation_id)) continue
+        const ws = String(r.workspace_uris || '').toLowerCase()
+        if (extraSet.has(r.conversation_id) || ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))) {
+          matchedTopIds.push(r.conversation_id)
+          const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${r.conversation_id}.db`))
+          total += Math.max(r.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+        }
       }
-    }
 
-    if (matchedTopIds.length > 0) {
-      const ph = matchedTopIds.map(() => '?').join(',')
-      const childRows = db
-        .query(`SELECT conversation_id, step_count FROM conversation_summaries WHERE parent_conversation_id IN (${ph})`)
-        .all(...matchedTopIds) as Array<{ conversation_id: string; step_count: number }>
-      for (const c of childRows) {
-        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${c.conversation_id}.db`))
-        total += Math.max(c.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+      if (matchedTopIds.length > 0) {
+        const ph = matchedTopIds.map(() => '?').join(',')
+        const childRows = db
+          .query(`SELECT conversation_id, step_count FROM conversation_summaries WHERE parent_conversation_id IN (${ph})`)
+          .all(...matchedTopIds) as Array<{ conversation_id: string; step_count: number }>
+        for (const c of childRows) {
+          const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${c.conversation_id}.db`))
+          total += Math.max(c.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+        }
       }
-    }
-    db.close()
-    return total
-  } catch {
-    return 0
+      db.close()
+    } catch {}
   }
+
+  try {
+    const extSessions = collectAllExternalAgentSessions({
+      projectSlug: config.projectSlug,
+      legacyProjectSlugs: config.legacyProjectSlugs,
+      excludedIds: excludedSet,
+      workspacePath: targetWorkspacePath ?? undefined,
+    })
+    for (const s of extSessions) total += s.stepCount ?? 0
+  } catch {}
+
+  return total
 }
 
 function runSyncAndVerify(reason: string): boolean {
@@ -131,19 +142,28 @@ const child = spawn(agyExe, launchArgs, {
 child.unref()
 
 function getArchivedProjectTotalSteps(): number {
+  let total = 0
   const summariesPath = join(REPO_ROOT, 'antigravity-backup', 'summaries.json')
-  if (!existsSync(summariesPath)) return 0
-  try {
-    const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
-    let total = 0
-    for (const s of summaries || []) {
-      if (excludedSet.has(s.conversation_id)) continue
-      total += s.step_count ?? 0
-    }
-    return total
-  } catch {
-    return 0
+  if (existsSync(summariesPath)) {
+    try {
+      const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+      for (const s of summaries || []) {
+        if (excludedSet.has(s.conversation_id)) continue
+        total += s.step_count ?? 0
+      }
+    } catch {}
   }
+  const extManifestPath = join(REPO_ROOT, 'agent-backups', 'manifest.json')
+  if (existsSync(extManifestPath)) {
+    try {
+      const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
+      for (const s of extManifest.sessions || []) {
+        if (excludedSet.has(s.id)) continue
+        total += s.stepCount ?? 0
+      }
+    } catch {}
+  }
+  return total
 }
 
 // Wait up to 35 seconds for Antigravity UI or language_server to spin up
