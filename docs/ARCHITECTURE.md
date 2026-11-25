@@ -1,4 +1,4 @@
-# 🏗️ Internal Architecture & Antigravity Storage Schema
+# Internal Architecture & Antigravity Storage Schema
 
 Understanding how **Google Antigravity** stores conversations locally explains why naive file copying fails across machines and how `antigravity-chat-sync` achieves lossless two-way synchronization.
 
