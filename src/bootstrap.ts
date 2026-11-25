@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { createInterface } from 'node:readline/promises'
+import { createInterface } from 'node:readline'
 import { getArgValue, REPO_ROOT } from './config'
 import { installGlobalPlugin } from './plugin-install'
-import { discoverLocalProjectsFromAntigravity, registerProject } from './registry'
+import { discoverLocalProjectsFromAntigravity, loadRegistry, registerProject } from './registry'
 
 const COPY_ITEMS = [
   '.gitignore',
@@ -19,6 +19,62 @@ const COPY_ITEMS = [
   'templates',
   'tests',
 ]
+
+/**
+ * Cross-shell interactive line prompter compatible with Windows PowerShell, CMD,
+ * Windows Terminal, macOS/Linux PTYs, AND Git Bash / MINGW64 (mintty, where
+ * `process.stdin.isTTY` is `undefined`).
+ */
+function createLinePrompter() {
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+  const buffer: string[] = []
+  let pendingResolve: ((val: string | null) => void) | null = null
+  let closed = false
+
+  rl.on('line', (line) => {
+    if (pendingResolve) {
+      const r = pendingResolve
+      pendingResolve = null
+      r(line)
+    } else {
+      buffer.push(line)
+    }
+  })
+
+  rl.on('close', () => {
+    closed = true
+    if (pendingResolve) {
+      const r = pendingResolve
+      pendingResolve = null
+      r(null)
+    }
+  })
+
+  return {
+    async ask(promptText: string): Promise<string> {
+      process.stdout.write(promptText)
+      if (buffer.length > 0) {
+        return buffer.shift()!
+      }
+      if (closed) {
+        console.log('\nSetup cancelled.')
+        process.exit(0)
+      }
+      const line = await new Promise<string | null>((resolvePromise) => {
+        pendingResolve = resolvePromise
+      })
+      if (line === null) {
+        console.log('\nSetup cancelled.')
+        process.exit(0)
+      }
+      return line
+    },
+    close() {
+      rl.close()
+      process.stdin.pause()
+    },
+  }
+}
 
 function detectGitHubUsername(): string {
   const res = spawnSync('gh', ['api', 'user', '--jq', '.login'], {
@@ -42,29 +98,43 @@ export async function runBootstrap(): Promise<void> {
   let workspacePath = getArgValue('--workspace') || ''
   let archiveRepo = getArgValue('--repo') || ''
   let targetDir = getArgValue('--target') || ''
-  const nonInteractive =
+
+  const forceNonInteractive =
     process.argv.includes('--yes') ||
     process.argv.includes('-y') ||
-    Boolean(projectSlug && archiveRepo && targetDir)
+    process.argv.includes('--non-interactive') ||
+    process.env.CI === 'true' ||
+    Boolean(projectSlug && archiveRepo)
 
   const discovered = discoverLocalProjectsFromAntigravity()
+  const registry = loadRegistry()
   const ghUser = detectGitHubUsername()
 
-  if (!nonInteractive && process.stdin.isTTY) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout })
+  if (!forceNonInteractive) {
+    const prompter = createLinePrompter()
     try {
-      console.log('\nAntigravity Chat Sync — Interactive Project Setup')
-      console.log('─'.repeat(56))
+      console.log('\n┌────────────────────────────────────────────────────────────┐')
+      console.log('│  antigravity-chat-sync · Interactive Project Setup Wizard  │')
+      console.log('└────────────────────────────────────────────────────────────┘')
 
       if (!projectSlug) {
         if (discovered.length > 0) {
-          console.log('\nDetected Google Antigravity projects on this machine:')
+          console.log('\nDetected Google Antigravity projects on this machine:\n')
           discovered.forEach((p, idx) => {
-            console.log(`  [${idx + 1}] ${p.projectSlug}  (${p.workspacePath})`)
+            const numLabel = String(idx + 1).padStart(2, ' ')
+            const existing = registry.projects[p.projectSlug.toLowerCase()]
+            const badge = existing
+              ? `  [synced -> ${existing.archiveRepo || existing.archiveDir}]`
+              : ''
+            console.log(`  [${numLabel}] ${p.projectSlug.padEnd(28, ' ')} (${p.workspacePath})${badge}`)
           })
           const answer = (
-            await rl.question(`\nSelect project number [1-${discovered.length}] or type project folder name: `)
+            await prompter.ask(`\nSelect project [1-${discovered.length}] or type folder name (q to quit): `)
           ).trim()
+          if (!answer || answer.toLowerCase() === 'q' || answer.toLowerCase() === 'quit') {
+            console.log('Setup cancelled.')
+            return
+          }
           const num = Number(answer)
           if (Number.isInteger(num) && num >= 1 && num <= discovered.length) {
             projectSlug = discovered[num - 1].projectSlug
@@ -73,19 +143,19 @@ export async function runBootstrap(): Promise<void> {
             projectSlug = answer
           }
         } else {
-          projectSlug = (await rl.question('Target project folder name (e.g., my-app): ')).trim()
+          projectSlug = (await prompter.ask('\nTarget project folder name (e.g., my-app): ')).trim()
         }
       }
 
       if (!projectSlug) {
-        console.error('Aborted: projectSlug is required.')
+        console.error('Aborted: project folder name is required.')
         process.exit(1)
       }
 
       if (!workspacePath) {
         const match = discovered.find(d => d.projectSlug.toLowerCase() === projectSlug.toLowerCase())
         const defaultWs = match?.workspacePath || resolve(process.cwd(), projectSlug)
-        const wsAns = (await rl.question(`Local workspace path [${defaultWs}]: `)).trim()
+        const wsAns = (await prompter.ask(`Local workspace path [${defaultWs}]: `)).trim()
         workspacePath = wsAns || defaultWs
       }
 
@@ -93,24 +163,24 @@ export async function runBootstrap(): Promise<void> {
         ? resolve(workspacePath, '..', `${projectSlug}-chats`)
         : resolve(process.cwd(), `${projectSlug}-chats`)
       if (!targetDir) {
-        const tAns = (await rl.question(`Local archive directory [${defaultTarget}]: `)).trim()
+        const tAns = (await prompter.ask(`Local archive directory [${defaultTarget}]: `)).trim()
         targetDir = tAns || defaultTarget
       }
 
       const defaultRepo = `${ghUser || 'your-github-username'}/${projectSlug}-chats`
       if (!archiveRepo) {
-        const rAns = (await rl.question(`Private GitHub repository [${defaultRepo}]: `)).trim()
+        const rAns = (await prompter.ask(`Private GitHub repository [${defaultRepo}]: `)).trim()
         archiveRepo = rAns || defaultRepo
       }
 
       const installPluginAns = (
-        await rl.question('Install global Antigravity /chat-sync plugin? [Y/n]: ')
+        await prompter.ask('Install global Antigravity /chat-sync plugin? [Y/n]: ')
       ).trim().toLowerCase()
       const enableAutostartAns = (
-        await rl.question('Enable silent background auto-sync on OS login? [Y/n]: ')
+        await prompter.ask('Enable silent background auto-sync on OS login? [Y/n]: ')
       ).trim().toLowerCase()
       const createRemoteAns = (
-        await rl.question(`Create & push private GitHub repo (${archiveRepo}) now? [Y/n]: `)
+        await prompter.ask(`Create & push private GitHub repo (${archiveRepo}) now? [Y/n]: `)
       ).trim().toLowerCase()
 
       await executeProvisioning({
@@ -123,7 +193,7 @@ export async function runBootstrap(): Promise<void> {
         pushRemote: createRemoteAns !== 'n',
       })
     } finally {
-      rl.close()
+      prompter.close()
     }
     return
   }
@@ -210,7 +280,6 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
     console.log(`Installed global Antigravity plugin: ${pluginPath}`)
   }
 
-  // Write local README placeholder if fresh archive
   if (!existsSync(join(targetDir, 'ARCHIVE_INDEX.md'))) {
     writeFileSync(join(targetDir, 'ARCHIVE_INDEX.md'), `# ${projectSlug} Conversation Archive\n`, 'utf8')
   }
