@@ -59,3 +59,17 @@ During `bun run restore --workspace <path>` (or via automatic `../<projectSlug>`
 3. Drops secondary foreign workspace URIs whose paths do not exist on Machine B (e.g., a co-opened backend repo not cloned on Machine B).
 4. Atomically merges updates into `agyhub_summaries_proto.pb` and `conversation_summaries.db` (plus in-place rebinding of any newer local chats without downgrading their step count).
 5. Warns if `language_server` is still running — since Antigravity 2.x caches `agyhub_summaries_proto.pb` in RAM, running `bun run restore` after fully exiting Antigravity guarantees clean persistence.
+
+---
+
+## 5. Multi-Agent Storage Schemas & Cross-Agent Handoff (`v2.1`)
+
+In addition to Google Antigravity, `src/agents.ts` and `src/handoff.ts` implement native collectors, workspace-remapped restorers, and idempotent multi-turn session materializers for **Claude Code**, **OpenAI Codex**, and **Cursor**:
+
+| Agent | Local Storage Format | Multi-Conversation Materialization (`handoff --to`) |
+| :--- | :--- | :--- |
+| **Claude Code** | `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` (`summary`, `user`, `assistant` JSONL chain) | Writes deterministic UUIDv7 `.jsonl` threads per archived conversation so `claude --resume` lists the entire project history without duplicates. |
+| **OpenAI Codex** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `session_index.jsonl` + VS Code SQLite `state_*.sqlite` (`threads`) & `thread_history_*.sqlite` (`thread_turns`, `thread_items`) | Generates RFC 9562 UUIDv7 `SessionMeta` rollouts and upserts multi-turn user/assistant bubbles directly into `state_*.sqlite` and `thread_history_*.sqlite` so all project conversations appear natively in the VS Code Codex `Chats` sidebar. |
+| **Cursor** | `Cursor/User/workspaceStorage/<hash>/workspace.json` + `state.vscdb` (`ItemTable`: `aichat.chatdata` & `composer.composerData`) | Exports `.ai-chats/*.md` per conversation plus `.cursor/rules/chat-sync-handoff.mdc` index, automatically hidden via `.git/info/exclude`. |
+
+To prevent mirror feedback loops (`8 chats -> 16 -> 32`), seeded mirror sessions embed a `[antigravity-chat-sync-mirror:<lineCount>]` marker: unmodified mirrors are skipped during `sync`, whereas any conversation where the user continues chatting inside Claude Code or Codex (`lines.length > seededLineCount`) is automatically captured and archived on the next sync pass.
