@@ -79,8 +79,17 @@ if (process.platform === 'win32') {
   console.log(`✅ Installed silent Windows Startup watcher: ${startupFile}`)
 
   stopRunningDaemon()
-  spawnSync('wscript.exe', [startupFile], { windowsHide: true })
-  await Bun.sleep(800)
+  // Spawn via WMI Win32_Process.Create so the daemon lives outside any parent IDE/Job Object!
+  spawnSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-Command',
+      `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'wscript.exe "${startupFile}"' } | Out-Null`,
+    ],
+    { windowsHide: true },
+  )
+  await Bun.sleep(1000)
   if (existsSync(lockPath)) {
     const info = JSON.parse(readFileSync(lockPath, 'utf8'))
     console.log(`🟢 Background auto-sync daemon is now running silently (PID ${info.pid})!`)
