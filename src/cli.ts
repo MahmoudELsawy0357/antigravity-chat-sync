@@ -7,22 +7,23 @@ import { findRegisteredProject, loadRegistry } from './registry'
 
 function printHelp(): void {
   console.log(`
-antigravity-chat-sync — Project-scoped Google Antigravity conversation sync toolkit
+antigravity-chat-sync v2.0 — Multi-Agent Conversation Archiver & Session Handoff Bridge
+Supports: Google Antigravity · Claude Code · OpenAI Codex · Cursor
 
 Usage:
   bunx github:MahmoudELsawy0357/antigravity-chat-sync <command> [options]
 
 Setup & Plugin Commands:
-  setup | bootstrap        Interactive (or flag-driven) wizard to create & link a project archive
-  install-plugin           Install the global Antigravity plugin (/chat-sync) on this machine
-  uninstall-plugin         Remove the global Antigravity plugin from this machine
+  setup | bootstrap        Interactive wizard to create & link a project archive
+  install-plugin           Install /chat-sync across Antigravity, Claude Code & Codex
+  uninstall-plugin         Remove global /chat-sync plugin & skills from this machine
   projects                 List all project archives registered on this machine
 
-Archive Commands (run inside archive dir, or pass --project <slug> / --dir <path>):
-  init                     Initialize sync.config.json & local playbooks in the current directory
-  sync                     Pull, export Markdown, sanitize SQLite blobs, verify, commit & push
-  restore                  Pull & non-destructively restore conversations (--wait | --workspace <path>)
-  status | doctor          Compare local vs. archived step counts & inspect project_id health
+Sync, Search & Cross-Agent Handoff Commands:
+  sync                     Pull, export Markdown (all 4 agents), sanitize secrets & push
+  restore                  Pull & restore conversations across Antigravity, Claude & Codex
+  handoff | continue       Resume latest session in another agent (--to claude|codex|cursor|antigravity)
+  status | doctor          Compare local vs. archived sessions across all installed agents
   search "<keyword>"       Full-text search across archived conversations with clickable links
   verify                   Audit all Markdown & compressed archives for secret leaks & size limits
   autostart                Install & start silent OS login background auto-sync daemon
@@ -68,20 +69,21 @@ if (command === 'setup' || command === 'bootstrap') {
 if (command === 'install-plugin' || command === 'plugin:install') {
   const { installGlobalPlugin, PLUGIN_DIR_NAME } = await import('./plugin-install')
   const cwdHasPlugin = existsSync(join(process.cwd(), 'plugin', 'plugin.json'))
-  const installed = installGlobalPlugin(cwdHasPlugin ? process.cwd() : REPO_ROOT)
-  console.log(`Installed global Antigravity plugin to: ${installed}`)
-  console.log(`Manage in Antigravity UI: customization://${PLUGIN_DIR_NAME}`)
+  const report = installGlobalPlugin(cwdHasPlugin ? process.cwd() : REPO_ROOT, process.argv.includes('--all-agents'))
+  console.log(`Installed Antigravity plugin : ${report.antigravityPluginDir}`)
+  if (report.claudeSkillDir) console.log(`Installed Claude Code skill  : ${report.claudeSkillDir}`)
+  if (report.codexSkillDir) console.log(`Installed Codex skill        : ${report.codexSkillDir}`)
+  console.log(`Manage in Antigravity UI     : customization://${PLUGIN_DIR_NAME}`)
   process.exit(0)
 }
 
 if (command === 'uninstall-plugin' || command === 'plugin:uninstall') {
   const { uninstallGlobalPlugin, PLUGIN_DIR_NAME } = await import('./plugin-install')
   const removed = uninstallGlobalPlugin()
-  console.log(removed ? `Removed global plugin: ${PLUGIN_DIR_NAME}` : `Plugin ${PLUGIN_DIR_NAME} was not installed.`)
+  console.log(removed ? `Removed global plugin & skills: ${PLUGIN_DIR_NAME}` : `Plugin ${PLUGIN_DIR_NAME} was not installed.`)
   process.exit(0)
 }
 
-// Resolve target archive directory for project-scoped commands
 let targetArchiveDir = REPO_ROOT
 const explicitDir = getArgValue('--dir')
 const explicitProject = getArgValue('--project')
@@ -96,7 +98,6 @@ if (explicitDir) {
     targetArchiveDir = reg.archiveDir
   }
 } else if (!existsSync(join(REPO_ROOT, 'sync.config.json')) && command !== 'init') {
-  // Try matching current working directory against registered workspaces
   const reg = findRegisteredProject(process.cwd())
   if (reg && existsSync(reg.archiveDir)) {
     targetArchiveDir = reg.archiveDir
@@ -107,6 +108,8 @@ const SCRIPT_MAP: Record<string, { script: string; extraArgs?: string[] }> = {
   init: { script: 'src/init.ts' },
   sync: { script: 'src/sync.ts' },
   restore: { script: 'src/restore.ts' },
+  handoff: { script: 'src/handoff.ts' },
+  continue: { script: 'src/handoff.ts' },
   status: { script: 'src/status.ts' },
   doctor: { script: 'src/status.ts' },
   search: { script: 'src/search.ts' },

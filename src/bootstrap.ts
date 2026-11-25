@@ -276,8 +276,10 @@ async function executeProvisioning(opts: ProvisionOptions): Promise<void> {
   })
 
   if (installPlugin) {
-    const pluginPath = installGlobalPlugin(targetDir)
-    console.log(`Installed global Antigravity plugin: ${pluginPath}`)
+    const report = installGlobalPlugin(targetDir)
+    console.log(`Installed Antigravity plugin: ${report.antigravityPluginDir}`)
+    if (report.claudeSkillDir) console.log(`Installed Claude Code skill : ${report.claudeSkillDir}`)
+    if (report.codexSkillDir) console.log(`Installed Codex skill       : ${report.codexSkillDir}`)
   }
 
   if (!existsSync(join(targetDir, 'ARCHIVE_INDEX.md'))) {

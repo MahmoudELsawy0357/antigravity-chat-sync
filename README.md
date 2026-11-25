@@ -7,17 +7,18 @@
 <div align="center">
 
 [![CI](https://img.shields.io/github/actions/workflow/status/MahmoudELsawy0357/antigravity-chat-sync/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/MahmoudELsawy0357/antigravity-chat-sync/actions/workflows/ci.yml)
+[![Agents](https://img.shields.io/badge/Agents-Antigravity_%7C_Claude_%7C_Codex_%7C_Cursor-161B22?style=flat-square)](./src/agents.ts)
 [![Runtime](https://img.shields.io/badge/Bun-%3E%3D1.1-000000?style=flat-square&logo=bun&logoColor=white)](https://bun.sh/)
 [![Language](https://img.shields.io/badge/TypeScript-Strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](./tsconfig.json)
-[![Plugin](https://img.shields.io/badge/Antigravity_Plugin-%2Fchat--sync-4F46E5?style=flat-square)](./plugin/plugin.json)
+[![Skill](https://img.shields.io/badge/Unified_Skill-%2Fchat--sync-4F46E5?style=flat-square)](./plugin/plugin.json)
 [![Security](https://img.shields.io/badge/Secret_Redaction-Byte--Preserving-0F766E?style=flat-square)](./docs/SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-2563EB?style=flat-square)](./LICENSE.md)
 
 <samp>
+  <a href="#supported-ai-agents">agents</a> &nbsp;·&nbsp;
   <a href="#core-capabilities">capabilities</a> &nbsp;·&nbsp;
-  <a href="#how-multi-device-sync-works">architecture</a> &nbsp;·&nbsp;
+  <a href="#cross-agent-session-handoff">handoff</a> &nbsp;·&nbsp;
   <a href="#quick-start">quick start</a> &nbsp;·&nbsp;
-  <a href="#daily-workflow">workflow</a> &nbsp;·&nbsp;
   <a href="#configuration--cli-reference">cli reference</a> &nbsp;·&nbsp;
   <a href="./docs/SECURITY.md">security</a>
 </samp>
@@ -28,7 +29,20 @@
 
 ## Overview
 
-`antigravity-chat-sync` keeps all **Google Antigravity** conversations, implementation plans, and artifacts for a single project backed up as readable Markdown in a private GitHub repository and synchronized across multiple machines (for example, an office workstation and a home laptop) — without mixing unrelated workspaces, leaking credentials, or polluting your project's Git tree.
+`antigravity-chat-sync` (`v2.0`) is a project-scoped AI session archiver, multi-device synchronization engine, and **cross-agent session handoff bridge** across **Google Antigravity**, **Claude Code**, **OpenAI Codex**, and **Cursor**.
+
+Start a feature in **Antigravity** at the office, continue the exact session in **Claude Code** or **Codex** on your laptop, and review or iterate in **Cursor** on a third machine — backed by one secret-redacted private GitHub archive per project.
+
+---
+
+## Supported AI Agents
+
+| Agent | Local Storage Discovery | Same-Agent Multi-PC Restore | Cross-Agent Handoff (`--to`) | Global `/chat-sync` Skill |
+| :--- | :--- | :---: | :---: | :---: |
+| **Google Antigravity** | `~/.gemini/antigravity` (`SQLite + Protobuf`) | Lossless `.db` + `project_id` remap | Spawns live chat via `ConversationService` | `~/.gemini/config/plugins/` |
+| **Claude Code** | `~/.claude/projects/<encoded-cwd>/*.jsonl` | Lossless `.jsonl` + `cwd` remap | Seeds resumable `claude --resume <id>` session | `~/.claude/skills/chat-sync/` |
+| **OpenAI Codex** | `~/.codex/sessions/**/*.jsonl` + `session_index.jsonl` | Lossless `.jsonl` + `session_index` upsert | Seeds resumable thread in Codex CLI & VS Code | `~/.codex/skills/chat-sync/` |
+| **Cursor** | `Cursor/User/workspaceStorage/*/state.vscdb` | Unified Markdown & JSON archive | Generates `.cursor/rules/chat-sync-handoff.mdc` | `.cursor/rules/` (git-excluded) |
 
 ---
 
@@ -36,27 +50,43 @@
 
 | Capability | Details |
 | :--- | :--- |
-| **Native `/chat-sync` Plugin** | Installs once globally into `~/.gemini/config/plugins/antigravity-chat-sync` so `/chat-sync`, sync, restore, search, and chat-splitting work in any project with zero local files. |
-| **One-Line `bunx` Interactive Setup** | Auto-discovers local Antigravity projects, provisions the archive directory, creates your private GitHub repo, and activates background sync in a single command. |
-| **Strict Project Isolation** | Filters `~/.gemini/antigravity` by `workspace_uris` so only conversations and child subagents belonging to your target project are archived. |
-| **GitHub-Ready Markdown & Search** | Exports chronological transcripts and artifacts (`< 380 KB` auto-paginated) with instant CLI/chat search returning clickable `conversation://<id>` links. |
-| **Additive Multi-Device Merge** | Synchronizes across any number of machines without overwriting newer local steps or deleting conversations created on other devices. |
-| **Antigravity 2.x Remapping** | Auto-detects or initializes `~/.gemini/config/projects/*.json`, losslessly rewrites Protobuf `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, and adapts `workspace_uris` across drives and OSes. |
-| **WAL-Safe SQLite Handling** | Captures active `-wal` and `-shm` frames via `PRAGMA wal_checkpoint(TRUNCATE)` on isolated staging copies, cleans orphan chunks, and supports race-free `bun run restore --wait`. |
-| **Protobuf-Safe Secret Redaction** | Scrubs API keys, tokens, PEM blocks, database URLs, and JWTs using **Same-Byte-Length Binary Replacement + `VACUUM`**, audited pre-push by `bun run verify`. |
-| **Zero Git LFS Dependency** | Compresses `140+ MB` SQLite trajectories down to `~20 MB` via `Bun.gzipSync` and automatically splits archives exceeding `40 MB` into `.gz.partNN` chunks. |
-| **Silent Background Auto-Sync** | Runs invisibly on OS login (`bun run autostart`) with zero console flashes — auto-restores on boot and auto-syncs after **3m idle**, every **15m of active work**, and on **Antigravity exit**. |
+| **Cross-Agent Session Handoff** | Converts the latest conversation from any agent into a native resumable session in **Claude Code**, **Codex**, **Antigravity**, or **Cursor** via `bun run handoff --to <agent>`. |
+| **Unified Multi-Agent Archive** | Collects sessions from all 4 coding agents strictly filtered by `projectSlug`, merging them into one chronological `ARCHIVE_INDEX.md` with per-agent badges. |
+| **Universal `/chat-sync` Skill** | One `bun run plugin:install` command installs `/chat-sync` simultaneously into **Antigravity**, **Claude Code**, and **Codex** with zero files added to your project repo. |
+| **One-Line `bunx` Interactive Setup** | Auto-discovers local workspaces across shells (including PowerShell, macOS/Linux, and Windows Git Bash `MINGW64`), creates your private GitHub repo, and enables auto-sync. |
+| **Antigravity 2.x Protobuf Remapping** | Losslessly rewrites `raw_summary`, `trajectory_metadata_blob`, and `agyhub_summaries_proto.pb`, adapting `workspace_uris` and `project_id` across drives and OSes. |
+| **Protobuf-Safe Secret Redaction** | Scrubs API keys, tokens, PEM blocks, database URLs, and JWTs using **Same-Byte-Length Binary Replacement + `VACUUM`**, verified across all `.gz` and `.partNN` chunks before push. |
+| **Zero Git LFS Dependency** | Compresses `140+ MB` SQLite databases down to `~20 MB` via `Bun.gzipSync` and splits archives above `40 MB` automatically. |
+| **Silent Background Auto-Sync** | Runs invisibly on OS login (`bun run autostart`) — watches local step changes across **Antigravity, Claude Code, Codex, and Cursor** (3m idle / 15m checkpoint / exit sync). |
 
 ---
 
-## How Multi-Device Sync Works
+## Cross-Agent Session Handoff
 
 ```mermaid
 flowchart LR
-    A["Machine A<br/>Google Antigravity"] -- "WAL Copy + Redact + Gzip" --> G[("Private GitHub<br/>Archive Repo")]
-    G -- "Lossless Protobuf & Path Remap" --> B["Machine B<br/>Google Antigravity"]
-    B -- "3m Idle / 15m / Exit Sync" --> G
-    G -- "Additive Step-Count Merge" --> A
+    M1["Machine 1<br/>Google Antigravity"] -- "Auto-Sync (WAL + Redact)" --> GH[("Private GitHub<br/>Project Archive")]
+    GH -- "handoff --to claude" --> M2["Machine 2<br/>Claude Code / Codex"]
+    M2 -- "Auto-Sync (.jsonl)" --> GH
+    GH -- "handoff --to cursor" --> M3["Machine 3<br/>Cursor / Antigravity"]
+```
+
+Switch coding agents across machines (or on the same machine) without losing architectural context:
+
+```bash
+# Resume the latest project session (from any agent) natively inside Claude Code:
+bunx github:MahmoudELsawy0357/antigravity-chat-sync handoff --to claude --project my-app
+# -> Outputs: claude --resume <new-session-uuid>
+
+# Resume the latest project session natively inside OpenAI Codex (CLI & VS Code sidebar):
+bunx github:MahmoudELsawy0357/antigravity-chat-sync handoff --to codex --project my-app
+# -> Outputs: codex resume <new-session-uuid>
+
+# Inject the latest session context into Cursor Composer (hidden via .git/info/exclude):
+bunx github:MahmoudELsawy0357/antigravity-chat-sync handoff --to cursor --project my-app
+
+# Spawn a clean continuation chat directly inside Google Antigravity:
+bunx github:MahmoudELsawy0357/antigravity-chat-sync handoff --to antigravity --project my-app
 ```
 
 ---
@@ -70,20 +100,13 @@ flowchart LR
 
 ### Option A — One-Line Interactive Wizard (`bunx` — Recommended)
 
-Run from anywhere in your terminal — no manual cloning required:
-
 ```bash
 bunx github:MahmoudELsawy0357/antigravity-chat-sync setup
 ```
 
-The interactive wizard automatically detects all **Google Antigravity** projects on your machine, creates the sibling archive folder, installs the global `/chat-sync` plugin, audits against secret leaks, creates your private GitHub repository, and enables silent OS login auto-sync.
+Detects local workspaces, creates the sibling archive directory, installs the `/chat-sync` skill across your installed AI agents, verifies zero secret leaks, creates your private GitHub repository, and activates silent OS login auto-sync.
 
-### Option B — Automated Setup Inside Antigravity Chat
-
-> [!TIP]
-> Open [`templates/AGENT_BOOTSTRAPER_PROMPT.md`](./templates/AGENT_BOOTSTRAPER_PROMPT.md), paste the prompt into **Google Antigravity** inside your target project, set your GitHub username and private archive repo name, and let the agent configure and push everything automatically.
-
-### Option C — Manual CLI Setup
+### Option B — Manual CLI Setup
 
 ```bash
 # 1. Clone this toolkit into a dedicated archive folder next to your project
@@ -91,14 +114,14 @@ git clone https://github.com/MahmoudELsawy0357/antigravity-chat-sync.git my-proj
 cd my-project-chats
 rm -rf .git && git init -b main
 
-# 2. Initialize configuration and install the global Antigravity /chat-sync plugin
+# 2. Initialize configuration and install /chat-sync across installed AI agents
 bun run init \
   --project "my-project-folder-name" \
   --repo "your-github-username/my-project-chats" \
   --workspace "/full/path/to/my-project-folder-name"
 bun run plugin:install
 
-# 3. Export conversations locally and audit for secret leaks
+# 3. Export sessions locally and audit for secret leaks
 bun run sync --no-push
 bun run verify
 
@@ -114,43 +137,29 @@ bun run autostart
 
 ## Daily Workflow
 
-### 1. Zero-Touch Background Mode (Recommended)
+### 1. Zero-Touch Background Mode
 
-Once `bun run autostart` is enabled on each machine, synchronization runs silently in the background regardless of how you launch Antigravity:
+Once `bun run autostart` is enabled on each machine, the background watcher monitors local conversation activity across **Antigravity, Claude Code, Codex, and Cursor**:
 
 | Trigger | Behavior |
 | :--- | :--- |
 | **OS Login / Boot** | Automatically pulls and restores newer remote conversations while Antigravity is closed. |
-| **3 Minutes Idle** | Pushes new local conversation steps automatically after 3 minutes of inactivity. |
-| **15-Minute Checkpoint** | Saves and pushes progress every 15 minutes during continuous uninterrupted sessions. |
+| **3 Minutes Idle** | Pushes new local steps from any supported agent after 3 minutes of inactivity. |
+| **15-Minute Checkpoint** | Saves and pushes progress every 15 minutes during continuous coding sessions. |
 | **Application Exit** | Flushes and pushes final session updates as soon as Antigravity closes. |
 
-### 2. Native `/chat-sync` Plugin Commands
+### 2. `/chat-sync` Commands (Antigravity, Claude Code & Codex)
 
-Once installed via `bun run plugin:install` (or during `setup`), the `chat-sync` skill is available globally across every workspace in Antigravity without adding files to your repository:
-
-| Prompt in Antigravity Chat | Action |
+| Prompt | Action |
 | :--- | :--- |
-| `/chat-sync sync chats` | Pulls remote updates, sanitizes local conversations, verifies zero leaks, and pushes to GitHub. |
-| `/chat-sync restore chats` | Downloads newer conversations and remaps workspace paths and `project_id` to the current machine. |
-| `/chat-sync check status` | Compares local vs. archived step counts, background daemon state, and `project_id` bindings. |
-| `/chat-sync search <keyword>` | Searches archived transcripts and returns clickable `conversation://<id>` links. |
-| `/chat-sync move work to new chat` | Summarizes misplaced tasks and creates a clean project-scoped conversation via `ConversationService`. |
-
-### 3. Onboarding a Second Machine
-
-Drop `SETUP_SECOND_PC.md` into Antigravity on your second computer, or run manually:
-
-```bash
-git clone https://github.com/your-github-username/my-project-chats.git
-cd my-project-chats
-bun run plugin:install
-bun run restore --workspace "/path/to/my-project-on-second-pc"
-bun run autostart
-```
+| `/chat-sync sync chats` | Exports, sanitizes, verifies, and pushes project sessions from all installed agents. |
+| `/chat-sync restore chats` | Pulls and restores newer sessions into Antigravity, Claude Code, and Codex. |
+| `/chat-sync continue` | Loads the newest session context from another agent/machine to continue seamlessly. |
+| `/chat-sync check status` | Displays installed agents, daemon PID, and per-session sync status across all 4 tools. |
+| `/chat-sync search <keyword>` | Searches archived transcripts across all agents and outputs clickable links. |
 
 > [!IMPORTANT]
-> **Antigravity 2.x In-Memory Index Cache:** While Antigravity is open, `language_server` caches `agyhub_summaries_proto.pb` in memory. Close Antigravity completely (`File -> Exit`) before running `bun run restore`, or run `bun run restore --wait` while open so index updates persist automatically the moment Antigravity exits.
+> **Antigravity 2.x In-Memory Index Cache:** While Antigravity is open, `language_server` caches `agyhub_summaries_proto.pb` in memory. Close Antigravity completely (`File -> Exit`) before running `bun run restore`, or run `bun run restore --wait` while open so sidebar index updates persist automatically the moment Antigravity exits.
 
 ---
 
@@ -174,22 +183,18 @@ bun run autostart
 | Command | Description |
 | :--- | :--- |
 | `bun run setup` | Launches the interactive project discovery and archive provisioning wizard. |
-| `bun run plugin:install` | Installs the native `antigravity-chat-sync` plugin (`/chat-sync`) globally in Antigravity. |
-| `bun run plugin:uninstall` | Removes the global `antigravity-chat-sync` plugin from `~/.gemini/config/plugins`. |
-| `bun run init` | Initializes `sync.config.json`, registers the project, and installs local playbooks. |
-| `bun run sync` | Pulls remote changes, exports Markdown, sanitizes `.db` blobs, verifies, commits, and pushes. |
-| `bun run sync --no-push` | Exports, sanitizes, and builds archives locally without committing or pushing. |
-| `bun run sync --exclude <id>` | Excludes a specific conversation UUID from the current sync pass. |
-| `bun run restore` | Pulls remote archives and restores missing or newer conversations non-destructively. |
-| `bun run restore --wait` | Unpacks archives immediately and writes index files the instant Antigravity exits. |
-| `bun run restore --workspace <path>` | Explicitly specifies the target project path on the current machine. |
-| `bun run search "<keyword>"` | Searches all archived transcripts and artifacts and outputs `conversation://<id>` links. |
+| `bun run plugin:install` | Installs `/chat-sync` globally across Antigravity, Claude Code, and Codex. |
+| `bun run plugin:uninstall` | Removes the global `/chat-sync` plugin and skills from this machine. |
+| `bun run sync` | Pulls remote changes, exports all 4 agents, sanitizes secrets, verifies, and pushes. |
+| `bun run restore` | Pulls remote archives and restores Antigravity, Claude Code, and Codex sessions. |
+| `bun run restore --wait` | Unpacks archives immediately and writes Antigravity index files on exit. |
+| `bun run handoff --to <agent>` | Seeds a resumable continuation session in `claude`, `codex`, `cursor`, or `antigravity`. |
+| `bun run search "<keyword>"` | Searches archived transcripts across all agents and outputs `conversation://` links. |
+| `bun run status` / `bun run doctor` | Displays multi-agent diagnostics comparing local vs. archived session step counts. |
 | `bun run autostart` | Installs and starts the silent OS login background auto-sync daemon. |
 | `bun run autostart:stop` | Stops the background daemon and removes the OS login startup entry. |
-| `bun run shortcut` | Creates a desktop launcher (`<Project> (Antigravity)`) with pre-launch restore and exit sync. |
-| `bun run status` / `bun run doctor` | Displays read-only diagnostics comparing local vs. archived step counts and `project_id` health. |
-| `bun run verify` | Audits all Markdown, `.gz`, and multi-part `.gz.partNN` files for secret leaks and size limits. |
-| `bun test` | Executes the unit test suite (Protobuf remapping, redaction, chunking, search, and plugin spec). |
+| `bun run verify` | Audits `conversations/`, `antigravity-backup/`, and `agent-backups/` for secret leaks. |
+| `bun test` | Executes the automated unit test suite across all 4 agent adapters and security rules. |
 
 ---
 
@@ -198,43 +203,38 @@ bun run autostart
 ```text
 antigravity-chat-sync/
 ├── .github/workflows/
-│   └── ci.yml                     # Automated typecheck & unit test pipeline on push / PR
-├── plugin/                        # Native Google Antigravity plugin bundle
-│   ├── plugin.json                # Plugin manifest & starter prompts
-│   ├── assets/logo.svg            # High-contrast plugin icon
-│   ├── README.md                  # In-app Customizations UI overview
-│   └── skills/chat-sync/SKILL.md  # Global /chat-sync agent skill & workflows
+│   └── ci.yml                       # Automated strict TS typecheck & unit test pipeline
+├── plugin/                          # Native Antigravity plugin & universal SKILL.md bundle
+│   ├── plugin.json                  # Plugin manifest & starter prompts
+│   ├── assets/logo.svg              # Blueprint identity mark
+│   ├── README.md                    # In-app Customizations UI overview
+│   └── skills/chat-sync/SKILL.md    # Shared skill installed into Antigravity, Claude & Codex
 ├── src/
-│   ├── cli.ts                     # Unified CLI router (`bunx` entrypoint)
-│   ├── bootstrap.ts               # Interactive project discovery & setup wizard
-│   ├── plugin-install.ts          # Global Antigravity plugin installer & auto-registrar
-│   ├── registry.ts                # Machine-local multi-project archive registry
-│   ├── search.ts                  # Full-text archive search with conversation:// links
-│   ├── config.ts                  # Configuration loader & CLI argument parser
-│   ├── init.ts                    # Project initializer & local playbook installer
-│   ├── protobuf.ts                # Lossless Antigravity 2.x Protobuf & project_id remapper
-│   ├── redact.ts                  # Same-byte-length binary Protobuf sanitizer + SQLite VACUUM
-│   ├── markdown-exporter.ts       # JSONL & FTS5 Markdown builder with auto-pagination
-│   ├── sync.ts                    # Additive push engine (WAL checkpoint + chunk management)
-│   ├── restore.ts                 # Non-destructive pull, --wait mode & cross-drive remapper
-│   ├── daemon.ts                  # Silent background watcher (3m idle / 15m checkpoint / exit)
-│   ├── autostart.ts               # Cross-platform OS login installer (Windows / macOS / Linux)
-│   ├── launch.ts                  # Reload-proof desktop session wrapper
-│   ├── shortcut.ts                # Desktop shortcut generator
-│   ├── status.ts                  # Sync & project_id health diagnostics
-│   └── verify.ts                  # Single & multi-part (.partNN) gunzip secret-leak auditor
+│   ├── cli.ts                       # Unified CLI router (`bunx` entrypoint)
+│   ├── agents.ts                    # Claude Code, Codex & Cursor adapters + session seeders
+│   ├── handoff.ts                   # Cross-agent session handoff & context bridge
+│   ├── bootstrap.ts                 # Cross-shell interactive setup wizard (incl. MINGW64)
+│   ├── plugin-install.ts            # Multi-agent global plugin & skill installer
+│   ├── registry.ts                  # Machine-local project archive registry
+│   ├── search.ts                    # Full-text archive search
+│   ├── sync.ts                      # Multi-agent additive push engine + unified index
+│   ├── restore.ts                   # Non-destructive multi-agent pull & path remapper
+│   ├── daemon.ts                    # Silent multi-agent background watcher
+│   ├── autostart.ts                 # Cross-platform OS login installer
+│   ├── protobuf.ts                  # Lossless Antigravity 2.x Protobuf & project_id remapper
+│   ├── redact.ts                    # Same-byte-length binary Protobuf & text secret sanitizer
+│   ├── markdown-exporter.ts         # Antigravity JSONL & FTS5 Markdown builder
+│   ├── status.ts                    # Multi-agent sync & health diagnostics
+│   └── verify.ts                    # Single & multi-part (.partNN) gunzip secret-leak auditor
 ├── tests/
-│   ├── protobuf.test.ts           # Lossless Protobuf & project_id remapping tests
-│   ├── redact.test.ts             # Secret detection, byte-length preservation & VACUUM tests
-│   ├── verify-chunks.test.ts      # Multi-part archive reassembly & leak-audit tests
-│   └── search-and-plugin.test.ts  # Search, project registry & plugin manifest spec tests
-├── templates/
-│   ├── AGENT_BOOTSTRAPER_PROMPT.md
-│   ├── CHATS_SYNC.template.md
-│   └── SETUP_SECOND_PC.template.md
+│   ├── protobuf.test.ts             # Lossless Protobuf & project_id remapping tests
+│   ├── redact.test.ts               # Secret detection, byte-length preservation & VACUUM tests
+│   ├── verify-chunks.test.ts        # Multi-part archive reassembly & leak-audit tests
+│   ├── search-and-plugin.test.ts    # Search, project registry & plugin manifest spec tests
+│   └── multi-agent-handoff.test.ts  # Claude, Codex & Cursor adapters + cross-agent handoff tests
 ├── docs/
-│   ├── ARCHITECTURE.md            # Antigravity 2.x SQLite, FTS5 & Protobuf storage internals
-│   └── SECURITY.md                # Threat model & binary Protobuf secret redaction design
+│   ├── ARCHITECTURE.md              # Storage schemas across Antigravity, Claude, Codex & Cursor
+│   └── SECURITY.md                  # Threat model & binary Protobuf secret redaction design
 ├── sync.config.example.json
 └── LICENSE.md
 ```
@@ -243,7 +243,7 @@ antigravity-chat-sync/
 
 ## Documentation & License
 
-- [**Architecture & Storage Internals (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
+- [**Architecture & Multi-Agent Storage Schemas (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
 - [**Security & Secret Redaction Policy (`docs/SECURITY.md`)**](./docs/SECURITY.md)
 - [**Automated AI Setup Prompt (`templates/AGENT_BOOTSTRAPER_PROMPT.md`)**](./templates/AGENT_BOOTSTRAPER_PROMPT.md)
 - Released under the [**MIT License**](./LICENSE.md).

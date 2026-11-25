@@ -81,12 +81,21 @@ describe('archive full-text search, project registry & native Antigravity plugin
     const tmp = mkdtempSync(join(tmpdir(), 'agy-plugin-test-'))
     const prevPlugins = process.env.AGY_PLUGINS_DIR
     const prevReg = process.env.AGY_SYNC_REGISTRY
+    const prevClaude = process.env.CLAUDE_CONFIG_DIR
+    const prevCodex = process.env.CODEX_HOME
     process.env.AGY_PLUGINS_DIR = join(tmp, 'plugins')
     process.env.AGY_SYNC_REGISTRY = join(tmp, 'registry.json')
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, 'claude')
+    process.env.CODEX_HOME = join(tmp, 'codex')
+    mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true })
+    mkdirSync(process.env.CODEX_HOME, { recursive: true })
 
     try {
-      const installedDir = installGlobalPlugin(REPO_ROOT)
+      const report = installGlobalPlugin(REPO_ROOT)
+      const installedDir = report.antigravityPluginDir
       expect(existsSync(join(installedDir, 'plugin.json'))).toBe(true)
+      expect(report.claudeSkillDir && existsSync(join(report.claudeSkillDir, 'SKILL.md'))).toBe(true)
+      expect(report.codexSkillDir && existsSync(join(report.codexSkillDir, 'SKILL.md'))).toBe(true)
 
       const manifest = JSON.parse(readFileSync(join(installedDir, 'plugin.json'), 'utf8'))
       for (const key of Object.keys(manifest)) {
@@ -109,6 +118,10 @@ describe('archive full-text search, project registry & native Antigravity plugin
       else process.env.AGY_PLUGINS_DIR = prevPlugins
       if (prevReg === undefined) delete process.env.AGY_SYNC_REGISTRY
       else process.env.AGY_SYNC_REGISTRY = prevReg
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude
+      if (prevCodex === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = prevCodex
       rmSync(tmp, { recursive: true, force: true })
     }
   })

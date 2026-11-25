@@ -2,6 +2,14 @@ import { Database } from 'bun:sqlite'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import {
+  AGENT_LABELS,
+  type ExternalAgentSession,
+  getClaudeDir,
+  getCodexDir,
+  restoreClaudeSession,
+  restoreCodexSession,
+} from './agents'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import {
   createProjectAdapter,
@@ -19,8 +27,11 @@ const agyDir = getAntigravityDir()
 const backupDir = join(REPO_ROOT, 'antigravity-backup')
 const dbChunksDir = join(backupDir, 'db-chunks')
 const brainArchivesDir = join(backupDir, 'brain-archives')
+const extBackupDir = join(REPO_ROOT, 'agent-backups')
+const extSessionsDir = join(extBackupDir, 'sessions')
 const isIndexOnly = process.argv.includes('--index-only')
 const waitForExit = process.argv.includes('--wait')
+const forceAllAgents = process.argv.includes('--all-agents')
 
 if (!isIndexOnly && existsSync(join(REPO_ROOT, '.git'))) {
   const remotes = spawnSync('git', ['remote'], { cwd: REPO_ROOT, encoding: 'utf8' })
@@ -30,11 +41,6 @@ if (!isIndexOnly && existsSync(join(REPO_ROOT, '.git'))) {
   }
 }
 
-if (!existsSync(agyDir)) {
-  console.error(`❌ Antigravity directory not found at: ${agyDir}`)
-  process.exit(1)
-}
-
 const explicitWs = getArgValue('--workspace')
 let targetWorkspacePath: string | null = explicitWs ? resolve(explicitWs) : null
 if (!targetWorkspacePath) {
@@ -42,327 +48,346 @@ if (!targetWorkspacePath) {
   if (existsSync(sibling)) targetWorkspacePath = sibling
 }
 
-const targetUris = targetWorkspacePath ? toWorkspaceUris(targetWorkspacePath) : null
-const { projectId: localProjectId, created: createdProjectConfig } = ensureLocalProjectId(
-  agyDir,
-  targetWorkspacePath,
-  targetUris,
-  config.projectSlug,
-)
-
-if (createdProjectConfig && localProjectId) {
-  console.log(`🆕 Created local Antigravity project config (${localProjectId}) for: ${targetWorkspacePath}`)
-}
-
-const adapter = createProjectAdapter({
-  projectSlug: config.projectSlug,
-  legacyProjectSlugs: config.legacyProjectSlugs,
-  targetUris,
-  localProjectId,
-})
-
 function readChunkedGzip(dir: string, chunkNames: string[]): Uint8Array {
   const buffers = chunkNames.map(name => readFileSync(join(dir, name)))
   return Bun.gunzipSync(Buffer.concat(buffers))
 }
 
-function adaptConvDbMetadataBlob(convDbPath: string): boolean {
-  if (!existsSync(convDbPath)) return false
-  try {
-    const db = new Database(convDbPath)
-    db.exec('PRAGMA busy_timeout = 5000;')
-    const row = db.query("SELECT data FROM trajectory_metadata_blob WHERE id = 'main'").get() as { data: Uint8Array } | null
-    let changed = false
-    if (row?.data) {
-      const orig = Buffer.from(row.data)
-      const adapted = adapter.adaptTrajectoryMetadataProto(orig)
-      if (Buffer.compare(orig, adapted) !== 0) {
-        db.query("UPDATE trajectory_metadata_blob SET data = ? WHERE id = 'main'").run(adapted)
-        changed = true
-      }
-    }
-    try {
-      db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-    } catch {
-      try {
-        db.exec('PRAGMA wal_checkpoint(PASSIVE);')
-      } catch {}
-    }
-    db.close()
-    return changed
-  } catch (err: any) {
-    console.warn(`⚠️ Failed to adapt trajectory_metadata_blob in ${convDbPath}: ${err?.message || err}`)
-    return false
-  }
-}
-
+// ── Part A: Restore Antigravity Conversations (when Antigravity is present) ──
 const manifestPath = join(backupDir, 'manifest.json')
 const summariesPath = join(backupDir, 'summaries.json')
 const metaExtrasPath = join(backupDir, 'meta-extras.json')
 
-if (!existsSync(manifestPath) || !existsSync(summariesPath)) {
-  console.error('❌ Backup manifest or summaries.json not found. Run `bun run sync` first on a machine with conversations.')
-  process.exit(1)
-}
+if (existsSync(agyDir) && existsSync(manifestPath) && existsSync(summariesPath)) {
+  const targetUris = targetWorkspacePath ? toWorkspaceUris(targetWorkspacePath) : null
+  const { projectId: localProjectId, created: createdProjectConfig } = ensureLocalProjectId(
+    agyDir,
+    targetWorkspacePath,
+    targetUris,
+    config.projectSlug,
+  )
 
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-const { summaries, fts } = JSON.parse(readFileSync(summariesPath, 'utf8'))
-const metaExtras: Record<string, { annotationPbtxt?: string; chapterTitlesB64?: string }> = existsSync(metaExtrasPath)
-  ? JSON.parse(readFileSync(metaExtrasPath, 'utf8'))
-  : {}
-const summaryById = new Map<string, any>(summaries.map((s: any) => [s.conversation_id, s]))
+  if (createdProjectConfig && localProjectId) {
+    console.log(`🆕 Created local Antigravity project config (${localProjectId}) for: ${targetWorkspacePath}`)
+  }
 
-const convsTargetDir = join(agyDir, 'conversations')
-const brainTargetDir = join(agyDir, 'brain')
-const annotationsDir = join(agyDir, 'annotations')
-const chapterTitlesDir = join(agyDir, 'chapter_titles')
-mkdirSync(convsTargetDir, { recursive: true })
-mkdirSync(brainTargetDir, { recursive: true })
+  const adapter = createProjectAdapter({
+    projectSlug: config.projectSlug,
+    legacyProjectSlugs: config.legacyProjectSlugs,
+    targetUris,
+    localProjectId,
+  })
 
-let restoredCount = 0
-let skippedCount = 0
-let metadataPatchedCount = 0
-let extrasRestoredCount = 0
+  function adaptConvDbMetadataBlob(convDbPath: string): boolean {
+    if (!existsSync(convDbPath)) return false
+    try {
+      const db = new Database(convDbPath)
+      db.exec('PRAGMA busy_timeout = 5000;')
+      const row = db.query("SELECT data FROM trajectory_metadata_blob WHERE id = 'main'").get() as { data: Uint8Array } | null
+      let changed = false
+      if (row?.data) {
+        const orig = Buffer.from(row.data)
+        const adapted = adapter.adaptTrajectoryMetadataProto(orig)
+        if (Buffer.compare(orig, adapted) !== 0) {
+          db.query("UPDATE trajectory_metadata_blob SET data = ? WHERE id = 'main'").run(adapted)
+          changed = true
+        }
+      }
+      try {
+        db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+      } catch {
+        try {
+          db.exec('PRAGMA wal_checkpoint(PASSIVE);')
+        } catch {}
+      }
+      db.close()
+      return changed
+    } catch (err: any) {
+      console.warn(`⚠️ Failed to adapt trajectory_metadata_blob in ${convDbPath}: ${err?.message || err}`)
+      return false
+    }
+  }
 
-// Stage 1: Unpack missing/newer .db and brain/ archives
-if (!isIndexOnly) {
-  for (const rec of manifest.records) {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const { summaries, fts } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+  const metaExtras: Record<string, { annotationPbtxt?: string; chapterTitlesB64?: string }> = existsSync(metaExtrasPath)
+    ? JSON.parse(readFileSync(metaExtrasPath, 'utf8'))
+    : {}
+  const summaryById = new Map<string, any>(summaries.map((s: any) => [s.conversation_id, s]))
+
+  const convsTargetDir = join(agyDir, 'conversations')
+  const brainTargetDir = join(agyDir, 'brain')
+  const annotationsDir = join(agyDir, 'annotations')
+  const chapterTitlesDir = join(agyDir, 'chapter_titles')
+  mkdirSync(convsTargetDir, { recursive: true })
+  mkdirSync(brainTargetDir, { recursive: true })
+
+  let restoredCount = 0
+  let skippedCount = 0
+  let metadataPatchedCount = 0
+  let extrasRestoredCount = 0
+
+  if (!isIndexOnly) {
+    for (const rec of manifest.records || []) {
+      const id = rec.conversation_id
+      const remoteSum = summaryById.get(id)
+      const remoteSteps = remoteSum?.step_count ?? 0
+      const localDbPath = join(convsTargetDir, `${id}.db`)
+      const localActualSteps = getActualConvDbStepCount(localDbPath)
+
+      if (localActualSteps >= remoteSteps && localActualSteps > 0) {
+        skippedCount++
+        continue
+      }
+
+      if (Array.isArray(rec.db_chunks) && rec.db_chunks.length > 0) {
+        try { rmSync(`${localDbPath}-wal`, { force: true }) } catch {}
+        try { rmSync(`${localDbPath}-shm`, { force: true }) } catch {}
+        writeFileSync(localDbPath, readChunkedGzip(dbChunksDir, rec.db_chunks))
+      }
+
+      if (Array.isArray(rec.brain_files_bundle) && rec.brain_files_bundle.length > 0) {
+        const rawBrainJson = readChunkedGzip(brainArchivesDir, rec.brain_files_bundle)
+        const files: Array<{ relPath: string; base64: string }> = JSON.parse(Buffer.from(rawBrainJson).toString('utf8'))
+        for (const f of files) {
+          const targetFile = join(brainTargetDir, id, f.relPath)
+          mkdirSync(dirname(targetFile), { recursive: true })
+          let contentBuf = Buffer.from(f.base64, 'base64')
+          if (/\.(md|json|jsonl|txt)$/i.test(f.relPath)) {
+            const rewritten = rewriteForeignBrainPaths(contentBuf.toString('utf8'), agyDir)
+            contentBuf = Buffer.from(rewritten, 'utf8')
+          }
+          writeFileSync(targetFile, contentBuf)
+        }
+      }
+
+      restoredCount++
+      console.log(`✅ [Antigravity] Restored: ${remoteSum?.title || remoteSum?.preview || id} (${remoteSteps} steps)`)
+    }
+  }
+
+  if (waitForExit && isLanguageServerRunning()) {
+    console.log('\n⏳ Waiting for Antigravity (language_server) to close...')
+    console.log('👉 Quit Antigravity completely (File -> Exit) now; restore will finalize automatically.')
+    while (isLanguageServerRunning()) {
+      await Bun.sleep(500)
+    }
+    await Bun.sleep(500)
+    console.log('✅ Antigravity closed! Finalizing metadata & indexes...')
+  }
+
+  for (const rec of manifest.records || []) {
     const id = rec.conversation_id
-    const remoteSum = summaryById.get(id)
-    const remoteSteps = remoteSum?.step_count ?? 0
     const localDbPath = join(convsTargetDir, `${id}.db`)
-    const localActualSteps = getActualConvDbStepCount(localDbPath)
+    if (adaptConvDbMetadataBlob(localDbPath)) metadataPatchedCount++
 
-    if (localActualSteps >= remoteSteps && localActualSteps > 0) {
-      skippedCount++
+    const extra = metaExtras[id]
+    if (extra) {
+      if (extra.annotationPbtxt) {
+        mkdirSync(annotationsDir, { recursive: true })
+        const annTarget = join(annotationsDir, `${id}.pbtxt`)
+        if (!existsSync(annTarget)) {
+          writeFileSync(annTarget, extra.annotationPbtxt, 'utf8')
+          extrasRestoredCount++
+        }
+      }
+      if (extra.chapterTitlesB64) {
+        mkdirSync(chapterTitlesDir, { recursive: true })
+        const chapTarget = join(chapterTitlesDir, `${id}.pb`)
+        if (!existsSync(chapTarget)) {
+          writeFileSync(chapTarget, Buffer.from(extra.chapterTitlesB64, 'base64'))
+          extrasRestoredCount++
+        }
+      }
+    }
+  }
+
+  const eligibleIds = new Set<string>()
+  const adaptedRawById = new Map<string, Buffer>()
+  const remoteStepsById = new Map<string, number>()
+
+  for (const r of summaries) {
+    const id = r.conversation_id
+    const remoteSteps = r.step_count ?? 0
+    remoteStepsById.set(id, remoteSteps)
+    const localActualSteps = getActualConvDbStepCount(join(convsTargetDir, `${id}.db`))
+    if (localActualSteps > remoteSteps && localActualSteps > 0) {
       continue
     }
-
-    if (Array.isArray(rec.db_chunks) && rec.db_chunks.length > 0) {
-      try { rmSync(`${localDbPath}-wal`, { force: true }) } catch {}
-      try { rmSync(`${localDbPath}-shm`, { force: true }) } catch {}
-      writeFileSync(localDbPath, readChunkedGzip(dbChunksDir, rec.db_chunks))
+    eligibleIds.add(id)
+    if (r.raw_summary_b64) {
+      adaptedRawById.set(id, adapter.adaptRawSummaryProto(Buffer.from(r.raw_summary_b64, 'base64')))
     }
+  }
 
-    if (Array.isArray(rec.brain_files_bundle) && rec.brain_files_bundle.length > 0) {
-      const rawBrainJson = readChunkedGzip(brainArchivesDir, rec.brain_files_bundle)
-      const files: Array<{ relPath: string; base64: string }> = JSON.parse(Buffer.from(rawBrainJson).toString('utf8'))
-      for (const f of files) {
-        const targetFile = join(brainTargetDir, id, f.relPath)
-        mkdirSync(dirname(targetFile), { recursive: true })
-        let contentBuf = Buffer.from(f.base64, 'base64')
-        if (/\.(md|json|jsonl|txt)$/i.test(f.relPath)) {
-          const rewritten = rewriteForeignBrainPaths(contentBuf.toString('utf8'), agyDir)
-          contentBuf = Buffer.from(rewritten, 'utf8')
+  const summaryDbPath = join(agyDir, 'conversation_summaries.db')
+  const slugLower = config.projectSlug.toLowerCase()
+  let localReboundCount = 0
+
+  if (existsSync(summaryDbPath)) {
+    const sdb = new Database(summaryDbPath)
+    sdb.exec('PRAGMA busy_timeout = 5000;')
+
+    const insertSummary = sdb.prepare(`
+      INSERT OR REPLACE INTO conversation_summaries (
+        conversation_id, title, preview, step_count, last_modified_time,
+        workspace_uris, status, source, project_id, agent_name,
+        parent_conversation_id, nesting_depth, battle_id, winning_conversation_id,
+        not_fully_idle, killed, last_user_input_time, last_user_input_step_index,
+        app_data_dir, raw_summary, group_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    const deleteFts = sdb.prepare('DELETE FROM conversations_fts WHERE conversation_id = ?')
+    const insertFts = sdb.prepare(`
+      INSERT INTO conversations_fts (
+        conversation_id, chunk_index, chunk_first_step, chunk_last_step,
+        last_modified_time, step_count, last_step_created_at, archived,
+        user_step_byte_offsets, agent_step_byte_offsets,
+        title, workspace, project, user_body, agent_body
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+
+    sdb.transaction(() => {
+      for (const r of summaries) {
+        if (!eligibleIds.has(r.conversation_id)) continue
+        insertSummary.run(
+          r.conversation_id,
+          r.title ?? '',
+          r.preview ?? '',
+          r.step_count ?? 0,
+          r.last_modified_time,
+          adapter.adaptWorkspaceUrisJson(r.workspace_uris ?? '[]'),
+          r.status ?? 'CASCADE_RUN_STATUS_IDLE',
+          r.source ?? '',
+          localProjectId || r.project_id || '',
+          r.agent_name ?? '',
+          r.parent_conversation_id ?? '',
+          r.nesting_depth ?? 0,
+          r.battle_id ?? '',
+          r.winning_conversation_id ?? '',
+          r.not_fully_idle ?? 0,
+          r.killed ?? 0,
+          r.last_user_input_time ?? r.last_modified_time,
+          r.last_user_input_step_index ?? -1,
+          r.app_data_dir ?? 'antigravity',
+          adaptedRawById.get(r.conversation_id) ?? null,
+          r.group_id ?? '',
+        )
+        deleteFts.run(r.conversation_id)
+      }
+
+      for (const f of fts) {
+        if (!eligibleIds.has(f.c0)) continue
+        insertFts.run(
+          f.c0,
+          f.c1,
+          f.c2,
+          f.c3,
+          f.c4,
+          f.c5,
+          f.c6,
+          f.c7,
+          f.c8_b64 ? Buffer.from(f.c8_b64, 'base64') : null,
+          f.c9_b64 ? Buffer.from(f.c9_b64, 'base64') : null,
+          f.c10,
+          targetUris ? targetUris.encodedUri : f.c11,
+          localProjectId || f.c12 || '',
+          f.c13,
+          f.c14,
+        )
+      }
+
+      const localRows = sdb
+        .query('SELECT conversation_id, workspace_uris, project_id, raw_summary FROM conversation_summaries WHERE lower(workspace_uris) LIKE ?')
+        .all(`%${slugLower}%`) as Array<{
+        conversation_id: string
+        workspace_uris: string
+        project_id: string
+        raw_summary: Uint8Array | null
+      }>
+
+      const updateLocalStmt = sdb.prepare(
+        'UPDATE conversation_summaries SET workspace_uris = ?, project_id = ?, raw_summary = ? WHERE conversation_id = ?',
+      )
+      for (const lr of localRows) {
+        if (eligibleIds.has(lr.conversation_id)) continue
+        const foreignProject = Boolean(
+          lr.project_id && localProjectId && lr.project_id !== localProjectId && !hasLocalProjectConfig(agyDir, lr.project_id),
+        )
+        const newWs = adapter.adaptWorkspaceUrisJson(lr.workspace_uris || '[]')
+        const newProj = localProjectId && (foreignProject || !lr.project_id) ? localProjectId : lr.project_id
+        const origRaw = lr.raw_summary ? Buffer.from(lr.raw_summary) : null
+        const newRaw = origRaw ? adapter.adaptRawSummaryProto(origRaw) : null
+        const rawChanged = origRaw && newRaw ? Buffer.compare(origRaw, newRaw) !== 0 : false
+
+        if (newWs !== lr.workspace_uris || newProj !== lr.project_id || rawChanged) {
+          updateLocalStmt.run(newWs, newProj, newRaw, lr.conversation_id)
+          if (adaptConvDbMetadataBlob(join(convsTargetDir, `${lr.conversation_id}.db`))) metadataPatchedCount++
+          localReboundCount++
         }
-        writeFileSync(targetFile, contentBuf)
       }
-    }
+      updateLocalStmt.finalize()
+    })()
 
-    restoredCount++
-    console.log(`✅ Restored: ${remoteSum?.title || remoteSum?.preview || id} (${remoteSteps} steps)`)
-  }
-}
-
-// Optional --wait mode: pause right before patching metadata/indexes until Antigravity closes cleanly
-if (waitForExit && isLanguageServerRunning()) {
-  console.log('\n⏳ Waiting for Antigravity (language_server) to close...')
-  console.log('👉 Quit Antigravity completely (File -> Exit) now; restore will finalize automatically.')
-  while (isLanguageServerRunning()) {
-    await Bun.sleep(500)
-  }
-  await Bun.sleep(500)
-  console.log('✅ Antigravity closed! Finalizing metadata & indexes...')
-}
-
-// Stage 2: Ensure trajectory_metadata_blob & extras (annotations/chapter_titles) are applied to all archive records
-for (const rec of manifest.records) {
-  const id = rec.conversation_id
-  const localDbPath = join(convsTargetDir, `${id}.db`)
-  if (adaptConvDbMetadataBlob(localDbPath)) metadataPatchedCount++
-
-  const extra = metaExtras[id]
-  if (extra) {
-    if (extra.annotationPbtxt) {
-      mkdirSync(annotationsDir, { recursive: true })
-      const annTarget = join(annotationsDir, `${id}.pbtxt`)
-      if (!existsSync(annTarget)) {
-        writeFileSync(annTarget, extra.annotationPbtxt, 'utf8')
-        extrasRestoredCount++
-      }
-    }
-    if (extra.chapterTitlesB64) {
-      mkdirSync(chapterTitlesDir, { recursive: true })
-      const chapTarget = join(chapterTitlesDir, `${id}.pb`)
-      if (!existsSync(chapTarget)) {
-        writeFileSync(chapTarget, Buffer.from(extra.chapterTitlesB64, 'base64'))
-        extrasRestoredCount++
-      }
-    }
-  }
-}
-
-// Stage 3: Precompute adapted raw summaries for all archive records whose remote version >= local steps
-const eligibleIds = new Set<string>()
-const adaptedRawById = new Map<string, Buffer>()
-const remoteStepsById = new Map<string, number>()
-
-for (const r of summaries) {
-  const id = r.conversation_id
-  const remoteSteps = r.step_count ?? 0
-  remoteStepsById.set(id, remoteSteps)
-  const localActualSteps = getActualConvDbStepCount(join(convsTargetDir, `${id}.db`))
-  if (localActualSteps > remoteSteps && localActualSteps > 0) {
-    continue
-  }
-  eligibleIds.add(id)
-  if (r.raw_summary_b64) {
-    adaptedRawById.set(id, adapter.adaptRawSummaryProto(Buffer.from(r.raw_summary_b64, 'base64')))
-  }
-}
-
-// Stage 4: Update conversation_summaries.db + in-place rebind of newer local / foreign-project conversations
-const summaryDbPath = join(agyDir, 'conversation_summaries.db')
-const slugLower = config.projectSlug.toLowerCase()
-let localReboundCount = 0
-
-if (existsSync(summaryDbPath)) {
-  const sdb = new Database(summaryDbPath)
-  sdb.exec('PRAGMA busy_timeout = 5000;')
-
-  const insertSummary = sdb.prepare(`
-    INSERT OR REPLACE INTO conversation_summaries (
-      conversation_id, title, preview, step_count, last_modified_time,
-      workspace_uris, status, source, project_id, agent_name,
-      parent_conversation_id, nesting_depth, battle_id, winning_conversation_id,
-      not_fully_idle, killed, last_user_input_time, last_user_input_step_index,
-      app_data_dir, raw_summary, group_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-  const deleteFts = sdb.prepare('DELETE FROM conversations_fts WHERE conversation_id = ?')
-  const insertFts = sdb.prepare(`
-    INSERT INTO conversations_fts (
-      conversation_id, chunk_index, chunk_first_step, chunk_last_step,
-      last_modified_time, step_count, last_step_created_at, archived,
-      user_step_byte_offsets, agent_step_byte_offsets,
-      title, workspace, project, user_body, agent_body
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
-  sdb.transaction(() => {
-    for (const r of summaries) {
-      if (!eligibleIds.has(r.conversation_id)) continue
-      insertSummary.run(
-        r.conversation_id,
-        r.title ?? '',
-        r.preview ?? '',
-        r.step_count ?? 0,
-        r.last_modified_time,
-        adapter.adaptWorkspaceUrisJson(r.workspace_uris ?? '[]'),
-        r.status ?? 'CASCADE_RUN_STATUS_IDLE',
-        r.source ?? '',
-        localProjectId || r.project_id || '',
-        r.agent_name ?? '',
-        r.parent_conversation_id ?? '',
-        r.nesting_depth ?? 0,
-        r.battle_id ?? '',
-        r.winning_conversation_id ?? '',
-        r.not_fully_idle ?? 0,
-        r.killed ?? 0,
-        r.last_user_input_time ?? r.last_modified_time,
-        r.last_user_input_step_index ?? -1,
-        r.app_data_dir ?? 'antigravity',
-        adaptedRawById.get(r.conversation_id) ?? null,
-        r.group_id ?? '',
-      )
-      deleteFts.run(r.conversation_id)
-    }
-
-    for (const f of fts) {
-      if (!eligibleIds.has(f.c0)) continue
-      insertFts.run(
-        f.c0,
-        f.c1,
-        f.c2,
-        f.c3,
-        f.c4,
-        f.c5,
-        f.c6,
-        f.c7,
-        f.c8_b64 ? Buffer.from(f.c8_b64, 'base64') : null,
-        f.c9_b64 ? Buffer.from(f.c9_b64, 'base64') : null,
-        f.c10,
-        targetUris ? targetUris.encodedUri : f.c11,
-        localProjectId || f.c12 || '',
-        f.c13,
-        f.c14,
-      )
-    }
-
-    // Rebind any newer local or foreign-project conversations for this slug in-place (never downgrading steps!)
-    const localRows = sdb
-      .query('SELECT conversation_id, workspace_uris, project_id, raw_summary FROM conversation_summaries WHERE lower(workspace_uris) LIKE ?')
-      .all(`%${slugLower}%`) as Array<{
-      conversation_id: string
-      workspace_uris: string
-      project_id: string
-      raw_summary: Uint8Array | null
-    }>
-
-    const updateLocalStmt = sdb.prepare(
-      'UPDATE conversation_summaries SET workspace_uris = ?, project_id = ?, raw_summary = ? WHERE conversation_id = ?',
-    )
-    for (const lr of localRows) {
-      if (eligibleIds.has(lr.conversation_id)) continue
-      const foreignProject = Boolean(
-        lr.project_id && localProjectId && lr.project_id !== localProjectId && !hasLocalProjectConfig(agyDir, lr.project_id),
-      )
-      const newWs = adapter.adaptWorkspaceUrisJson(lr.workspace_uris || '[]')
-      const newProj = localProjectId && (foreignProject || !lr.project_id) ? localProjectId : lr.project_id
-      const origRaw = lr.raw_summary ? Buffer.from(lr.raw_summary) : null
-      const newRaw = origRaw ? adapter.adaptRawSummaryProto(origRaw) : null
-      const rawChanged = origRaw && newRaw ? Buffer.compare(origRaw, newRaw) !== 0 : false
-
-      if (newWs !== lr.workspace_uris || newProj !== lr.project_id || rawChanged) {
-        updateLocalStmt.run(newWs, newProj, newRaw, lr.conversation_id)
-        if (adaptConvDbMetadataBlob(join(convsTargetDir, `${lr.conversation_id}.db`))) metadataPatchedCount++
-        localReboundCount++
-      }
-    }
-    updateLocalStmt.finalize()
-  })()
-
-  insertSummary.finalize()
-  deleteFts.finalize()
-  insertFts.finalize()
-  try {
-    sdb.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-  } catch {
+    insertSummary.finalize()
+    deleteFts.finalize()
+    insertFts.finalize()
     try {
-      sdb.exec('PRAGMA wal_checkpoint(PASSIVE);')
-    } catch {}
+      sdb.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    } catch {
+      try {
+        sdb.exec('PRAGMA wal_checkpoint(PASSIVE);')
+      } catch {}
+    }
+    sdb.close()
   }
-  sdb.close()
+
+  const hubUpdated = patchAgyhubSummariesProto({
+    agyDir,
+    adaptedRawById,
+    remoteStepsById,
+    adapter,
+  })
+
+  console.log(
+    `\n🎉 [Antigravity] Imported/updated: ${restoredCount} | Up-to-date: ${skippedCount} | .db patched: ${metadataPatchedCount} | Extras: ${extrasRestoredCount} | Index synced: ${eligibleIds.size + localReboundCount} (${hubUpdated} agyhub updates).`,
+  )
+  if (targetWorkspacePath) {
+    console.log(`🔗 Bound workspace to: ${targetWorkspacePath}${localProjectId ? ` (Project ID: ${localProjectId})` : ''}`)
+  }
+  if (isLanguageServerRunning()) {
+    console.log('⚠️ Note: Antigravity (language_server) is running — run `bun run restore --wait` and exit Antigravity to persist sidebar index updates.')
+  }
 }
 
-// Stage 5: Update Antigravity 2.x primary summary index (agyhub_summaries_proto.pb)
-const hubUpdated = patchAgyhubSummariesProto({
-  agyDir,
-  adaptedRawById,
-  remoteStepsById,
-  adapter,
-})
+// ── Part B: Restore Claude Code & Codex Sessions (when present on this machine) ──
+const extManifestPath = join(extBackupDir, 'manifest.json')
+if (!isIndexOnly && targetWorkspacePath && existsSync(extManifestPath)) {
+  const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
+  const hasClaude = forceAllAgents || existsSync(getClaudeDir())
+  const hasCodex = forceAllAgents || existsSync(getCodexDir())
+  let extRestored = 0
 
-console.log(
-  `\n🎉 Restore complete! Imported/updated: ${restoredCount} | Up-to-date: ${skippedCount} | .db metadata patched: ${metadataPatchedCount} | Extras restored: ${extrasRestoredCount} | Index synced: ${eligibleIds.size + localReboundCount} (${hubUpdated} agyhub updates).`,
-)
-if (targetWorkspacePath) {
-  console.log(`🔗 Bound workspace to: ${targetWorkspacePath}${localProjectId ? ` (Project ID: ${localProjectId})` : ''}`)
-}
-if (isLanguageServerRunning()) {
-  console.log('\n⚠️ Warning: Antigravity (language_server) is currently running and may overwrite agyhub_summaries_proto.pb from RAM!')
-  console.log('👉 Tip: Run with `--wait` from an external terminal so it auto-applies the instant you close Antigravity:')
-  console.log(`   cd "${REPO_ROOT}" && bun run restore --wait`)
-} else {
-  console.log('✅ Antigravity is closed — index updates are safely persisted. You can open Antigravity now!')
+  for (const meta of extManifest.sessions || []) {
+    if (!Array.isArray(meta.chunks) || meta.chunks.length === 0) continue
+    if (meta.agent === 'claude' && hasClaude) {
+      const rawJson = Buffer.from(readChunkedGzip(extSessionsDir, meta.chunks)).toString('utf8')
+      const session = JSON.parse(rawJson) as ExternalAgentSession
+      if (restoreClaudeSession(session, targetWorkspacePath)) {
+        extRestored++
+        console.log(`✅ [${AGENT_LABELS.claude}] Restored: ${session.title}`)
+      }
+    } else if (meta.agent === 'codex' && hasCodex) {
+      const rawJson = Buffer.from(readChunkedGzip(extSessionsDir, meta.chunks)).toString('utf8')
+      const session = JSON.parse(rawJson) as ExternalAgentSession
+      if (restoreCodexSession(session, targetWorkspacePath)) {
+        extRestored++
+        console.log(`✅ [${AGENT_LABELS.codex}] Restored: ${session.title}`)
+      }
+    }
+  }
+
+  if (extRestored > 0) {
+    console.log(`🎉 Restored ${extRestored} external agent session(s) for ${config.projectSlug}.`)
+  }
 }

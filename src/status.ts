@@ -3,6 +3,14 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import {
+  AGENT_LABELS,
+  type AgentKind,
+  collectAllExternalAgentSessions,
+  getClaudeDir,
+  getCodexDir,
+  getCursorUserDir,
+} from './agents'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import {
   detectLocalProjectId,
@@ -24,20 +32,29 @@ if (!targetWorkspacePath) {
 }
 
 const targetUris = targetWorkspacePath ? toWorkspaceUris(targetWorkspacePath) : null
-const localProjectId = detectLocalProjectId(agyDir, targetUris)
+const localProjectId = existsSync(agyDir) ? detectLocalProjectId(agyDir, targetUris) : null
 const lsRunning = isLanguageServerRunning()
 
-console.log(`\n🩺 Antigravity Chat Sync Status — "${config.projectDisplayName}" (${config.projectSlug})`)
-console.log('─'.repeat(76))
+const detectedAgents: string[] = []
+if (existsSync(agyDir)) detectedAgents.push('Antigravity')
+if (existsSync(getClaudeDir())) detectedAgents.push('Claude Code')
+if (existsSync(getCodexDir())) detectedAgents.push('Codex')
+if (existsSync(getCursorUserDir())) detectedAgents.push('Cursor')
+
+console.log(`\n🩺 Universal AI Chat Sync Status — "${config.projectDisplayName}" (${config.projectSlug})`)
+console.log('─'.repeat(80))
 console.log(`📁 Workspace Path   : ${targetWorkspacePath ?? '⚠️ Not found (pass --workspace <path>)'}`)
-console.log(
-  `🆔 Local Project ID : ${
-    localProjectId
-      ? `${localProjectId} (${hasLocalProjectConfig(agyDir, localProjectId) ? '✅ config exists' : '⚠️ missing config JSON'})`
-      : '⚠️ Not detected yet (will auto-create on restore)'
-  }`,
-)
-console.log(`⚙️ Antigravity LS   : ${lsRunning ? '🟡 Running (close before restore or use --wait)' : '🟢 Stopped (safe to restore)'}`)
+console.log(`🧩 Installed Agents : ${detectedAgents.length > 0 ? detectedAgents.join(' · ') : 'None detected'}`)
+if (existsSync(agyDir)) {
+  console.log(
+    `🆔 Antigravity ID   : ${
+      localProjectId
+        ? `${localProjectId} (${hasLocalProjectConfig(agyDir, localProjectId) ? '✅ config exists' : '⚠️ missing config JSON'})`
+        : '⚠️ Not detected yet (will auto-create on restore)'
+    }`,
+  )
+  console.log(`⚙️ Antigravity LS   : ${lsRunning ? '🟡 Running (close before restore or use --wait)' : '🟢 Stopped (safe to restore)'}`)
+}
 
 const safeSlug = config.projectSlug.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'project'
 let startupPath = ''
@@ -66,7 +83,7 @@ if (existsSync(lockPath)) {
 }
 const startupEnabled = existsSync(startupPath)
 console.log(
-  `🤖 Auto-Sync Daemon : ${daemonPid ? `🟢 Running (PID ${daemonPid})` : '⚪ Stopped (run `bun run autostart`)'} | OS Autostart: ${startupEnabled ? '✅ Enabled' : '⚪ Not installed'}`,
+  `🤖 Auto-Sync Daemon : ${daemonPid ? `🟢 Running (PID ${daemonPid})` : '⚪ Stopped (run \`bun run autostart\`)'} | OS Autostart: ${startupEnabled ? '✅ Enabled' : '⚪ Not installed'}`,
 )
 const daemonLogPath = join(REPO_ROOT, '.daemon.log')
 if (existsSync(daemonLogPath)) {
@@ -80,34 +97,53 @@ const legacyLowers = config.legacyProjectSlugs.map(s => s.toLowerCase()).filter(
 const excludedSet = new Set(config.excludedConversationIds)
 const extraSet = new Set(config.extraConversationIds)
 
-// Load archive summaries
+interface StatusEntry {
+  key: string
+  id: string
+  agent: AgentKind
+  title: string
+  localSteps: number | null
+  archiveSteps: number | null
+  isForeignProj?: boolean
+}
+
+const statusMap = new Map<string, StatusEntry>()
+
+// 1. Archive Antigravity summaries
 const summariesPath = join(REPO_ROOT, 'antigravity-backup', 'summaries.json')
-const archiveMap = new Map<string, any>()
 if (existsSync(summariesPath)) {
   const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
   for (const s of summaries || []) {
-    if (!s.parent_conversation_id) archiveMap.set(s.conversation_id, s)
+    if (s.parent_conversation_id) continue
+    const key = `antigravity:${s.conversation_id}`
+    statusMap.set(key, {
+      key,
+      id: s.conversation_id,
+      agent: 'antigravity',
+      title: s.title || s.preview || '(untitled)',
+      localSteps: null,
+      archiveSteps: s.step_count ?? 0,
+    })
   }
 }
 
-// Load local summaries
-const localMap = new Map<string, any>()
+// 2. Local Antigravity summaries
 const summaryDbPath = join(agyDir, 'conversation_summaries.db')
 let foreignProjCount = 0
-
 if (existsSync(summaryDbPath)) {
   const db = new Database(summaryDbPath, { readonly: true })
   const rows = db
-    .query("SELECT conversation_id, title, preview, step_count, workspace_uris, project_id, last_modified_time FROM conversation_summaries WHERE parent_conversation_id = ''")
+    .query("SELECT conversation_id, title, preview, step_count, workspace_uris, project_id FROM conversation_summaries WHERE parent_conversation_id = ''")
     .all() as any[]
   db.close()
 
   for (const r of rows) {
     if (excludedSet.has(r.conversation_id)) continue
+    const key = `antigravity:${r.conversation_id}`
     const ws = String(r.workspace_uris || '').toLowerCase()
     const matches =
       extraSet.has(r.conversation_id) ||
-      archiveMap.has(r.conversation_id) ||
+      statusMap.has(key) ||
       ws.includes(slugLower) ||
       legacyLowers.some(leg => ws.includes(leg))
     if (!matches) continue
@@ -118,11 +154,58 @@ if (existsSync(summaryDbPath)) {
       localProjectId && r.project_id && r.project_id !== localProjectId && !hasLocalProjectConfig(agyDir, r.project_id),
     )
     if (isForeignProj) foreignProjCount++
-    localMap.set(r.conversation_id, { ...r, effectiveSteps, isForeignProj })
+
+    const existing = statusMap.get(key)
+    statusMap.set(key, {
+      key,
+      id: r.conversation_id,
+      agent: 'antigravity',
+      title: r.title || existing?.title || r.preview || '(untitled)',
+      localSteps: effectiveSteps,
+      archiveSteps: existing?.archiveSteps ?? null,
+      isForeignProj,
+    })
   }
 }
 
-// Check agyhub_summaries_proto.pb for foreign project_id entries belonging to this project
+// 3. Archive External Agents (Claude, Codex, Cursor)
+const extManifestPath = join(REPO_ROOT, 'agent-backups', 'manifest.json')
+if (existsSync(extManifestPath)) {
+  try {
+    const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
+    for (const s of extManifest.sessions || []) {
+      const key = `${s.agent}:${s.id}`
+      statusMap.set(key, {
+        key,
+        id: s.id,
+        agent: s.agent,
+        title: s.title || '(untitled)',
+        localSteps: null,
+        archiveSteps: s.stepCount ?? 0,
+      })
+    }
+  } catch {}
+}
+
+// 4. Local External Agents (Claude, Codex, Cursor)
+const localExternals = collectAllExternalAgentSessions({
+  projectSlug: config.projectSlug,
+  legacyProjectSlugs: config.legacyProjectSlugs,
+  excludedIds: excludedSet,
+})
+for (const ext of localExternals) {
+  const key = `${ext.agent}:${ext.id}`
+  const existing = statusMap.get(key)
+  statusMap.set(key, {
+    key,
+    id: ext.id,
+    agent: ext.agent,
+    title: ext.title || existing?.title || '(untitled)',
+    localSteps: ext.stepCount,
+    archiveSteps: existing?.archiveSteps ?? null,
+  })
+}
+
 let agyhubForeignCount = 0
 const hubPbPath = join(agyDir, 'agyhub_summaries_proto.pb')
 if (existsSync(hubPbPath) && localProjectId) {
@@ -144,40 +227,50 @@ if (existsSync(hubPbPath) && localProjectId) {
   }
 }
 
-const allIds = new Set<string>([...archiveMap.keys(), ...localMap.keys()])
-const tableData: Array<{ ID: string; Title: string; Local: number | string; Archive: number | string; Status: string }> = []
+const tableData: Array<{
+  Agent: string
+  ID: string
+  Title: string
+  Local: number | string
+  Archive: number | string
+  Status: string
+}> = []
 
 let needPush = 0
 let needPull = 0
 
-for (const id of allIds) {
-  const loc = localMap.get(id)
-  const arc = archiveMap.get(id)
-  const title = (loc?.title || arc?.title || loc?.preview || arc?.preview || '(untitled)').slice(0, 36)
-  const locSteps = loc ? loc.effectiveSteps : '—'
-  const arcSteps = arc ? (arc.step_count ?? 0) : '—'
+for (const entry of statusMap.values()) {
+  const hasLoc = entry.localSteps !== null
+  const hasArc = entry.archiveSteps !== null
 
   let status = '✅ Synced'
-  if (loc && !arc) {
+  if (hasLoc && !hasArc) {
     status = '🆕 Local only (run sync)'
     needPush++
-  } else if (!loc && arc) {
-    status = '☁️ Archive only (run restore)'
+  } else if (!hasLoc && hasArc) {
+    status = '☁️ Archive only (run restore / handoff)'
     needPull++
-  } else if (loc && arc) {
-    if (loc.effectiveSteps > (arc.step_count ?? 0)) {
+  } else if (hasLoc && hasArc) {
+    if (entry.localSteps! > entry.archiveSteps!) {
       status = '⬆️ Local newer (run sync)'
       needPush++
-    } else if (loc.effectiveSteps < (arc.step_count ?? 0)) {
+    } else if (entry.localSteps! < entry.archiveSteps!) {
       status = '⬇️ Archive newer (run restore)'
       needPull++
     }
-    if (loc.isForeignProj) {
+    if (entry.isForeignProj) {
       status += ' | ⚠️ Foreign project_id'
     }
   }
 
-  tableData.push({ ID: id.slice(0, 8), Title: title, Local: locSteps, Archive: arcSteps, Status: status })
+  tableData.push({
+    Agent: AGENT_LABELS[entry.agent],
+    ID: entry.id.slice(0, 8),
+    Title: entry.title.slice(0, 34),
+    Local: hasLoc ? entry.localSteps! : '—',
+    Archive: hasArc ? entry.archiveSteps! : '—',
+    Status: status,
+  })
 }
 
 console.log('')
@@ -187,7 +280,7 @@ if (tableData.length === 0) {
   console.table(tableData)
 }
 
-console.log(`📊 Summary: ${allIds.size} main chat(s) | Push needed: ${needPush} | Restore needed: ${needPull}`)
+console.log(`📊 Summary: ${statusMap.size} session(s) across agents | Push needed: ${needPush} | Restore needed: ${needPull}`)
 if (foreignProjCount > 0 || agyhubForeignCount > 0) {
   console.log(
     `⚠️ Health check: Found ${foreignProjCount} SQLite row(s) and ${agyhubForeignCount} agyhub entry(s) with foreign/missing project_id. Run \`bun run restore --wait\` to rebind them.`,

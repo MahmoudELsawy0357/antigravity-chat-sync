@@ -3,55 +3,56 @@ import { join, relative } from 'node:path'
 import { REPO_ROOT } from './config'
 import { SECRET_RULES } from './redact'
 
-export interface SecretLeakHit {
-  file: string
+export interface LeakFinding {
   label: string
+  file: string
   count: number
 }
 
-export interface AuditReport {
+export interface VerifyReport {
   totalBytes: number
   maxBytes: number
   maxFile: string
   chunkedArchivesScanned: number
-  leaks: SecretLeakHit[]
+  leaks: LeakFinding[]
 }
 
 const PART_RE = /^(.+\.gz)\.part(\d+)$/
 
-function scanBuffer(rawBuf: Uint8Array, displayName: string, leaks: SecretLeakHit[]): void {
-  const content = Buffer.from(rawBuf).toString('latin1')
+function scanBuffer(rawBuf: Uint8Array, displayPath: string, leaks: LeakFinding[]) {
+  const contentStr = Buffer.from(rawBuf).toString('latin1')
   for (const rule of SECRET_RULES) {
-    rule.regex.lastIndex = 0
-    const matches = content.match(rule.regex)
-    if (matches && matches.length > 0) {
-      leaks.push({ file: displayName, label: rule.label, count: matches.length })
+    const re = new RegExp(rule.regex.source, rule.regex.flags)
+    let matchCount = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(contentStr)) !== null) {
+      if (!m[0].includes('REDACTED_')) matchCount++
+    }
+    if (matchCount > 0) {
+      leaks.push({ label: rule.label, file: displayPath, count: matchCount })
     }
   }
 }
 
-export function auditArchiveDirs(dirs: string[], rootDir = REPO_ROOT): AuditReport {
+export function auditArchiveDirs(dirs: string[], rootDir = REPO_ROOT): VerifyReport {
   let totalBytes = 0
   let maxBytes = 0
   let maxFile = ''
   let chunkedArchivesScanned = 0
-  const leaks: SecretLeakHit[] = []
-
-  // Group multi-part .gz.partNN files per directory so we reassemble and gunzip them in order
+  const leaks: LeakFinding[] = []
   const chunkGroups = new Map<string, Array<{ partNo: number; fullPath: string }>>()
 
   function scanDir(dir: string) {
     if (!existsSync(dir)) return
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === 'src' || entry.name === 'tests') continue
       const fullPath = join(dir, entry.name)
       if (entry.isDirectory()) {
         scanDir(fullPath)
       } else if (entry.isFile()) {
-        const sz = statSync(fullPath).size
-        totalBytes += sz
-        if (sz > maxBytes) {
-          maxBytes = sz
+        const size = statSync(fullPath).size
+        totalBytes += size
+        if (size > maxBytes) {
+          maxBytes = size
           maxFile = relative(rootDir, fullPath)
         }
 
@@ -88,7 +89,10 @@ export function auditArchiveDirs(dirs: string[], rootDir = REPO_ROOT): AuditRepo
 }
 
 if (import.meta.main) {
-  const report = auditArchiveDirs([join(REPO_ROOT, 'conversations'), join(REPO_ROOT, 'antigravity-backup')], REPO_ROOT)
+  const report = auditArchiveDirs(
+    [join(REPO_ROOT, 'conversations'), join(REPO_ROOT, 'antigravity-backup'), join(REPO_ROOT, 'agent-backups')],
+    REPO_ROOT,
+  )
 
   for (const leak of report.leaks) {
     console.error(`❌ Secret leak [${leak.label}] in ${leak.file} (${leak.count} occurrence(s))`)
@@ -106,5 +110,5 @@ if (import.meta.main) {
   if (totalLeakCount > 0 || report.maxBytes > 95 * 1024 * 1024) {
     process.exit(1)
   }
-  console.log('✅ Verification passed: zero secret leaks (including multi-part archives) and all files well below GitHub limits!')
+  console.log('✅ Verification passed: zero secret leaks (across Antigravity, Claude, Codex & Cursor archives) and all files below GitHub limits!')
 }

@@ -78,21 +78,21 @@
 
   <text x="176" y="106" class="mono" font-size="26" font-weight="700" fill="#1f2328" letter-spacing="-0.6">antigravity-chat-sync</text>
   <text x="176" y="135" class="sans" font-size="13.5" fill="#57606a">
-    Project-scoped Google Antigravity archiver &amp; multi-device sync.
+    Multi-agent AI session archiver, sync engine &amp; cross-agent handoff.
   </text>
   <text x="176" y="157" class="sans" font-size="12.5" fill="#6e7781">
-    Lossless Protobuf remapping, byte-safe redaction &amp; /chat-sync plugin.
+    Antigravity · Claude Code · Codex · Cursor — zero LFS &amp; byte-safe redaction.
   </text>
 
   <!-- Vertical Blueprint Divider -->
   <line x1="618.5" y1="42" x2="618.5" y2="166" stroke="#eaeef2" stroke-width="1" />
 
   <!-- Right Telemetry Column -->
-  <text x="644" y="56" class="mono" font-size="10.5" fill="#6e7781" letter-spacing="1">TOOLKIT · V1.1</text>
+  <text x="644" y="56" class="mono" font-size="10.5" fill="#6e7781" letter-spacing="1">TOOLKIT · V2.0</text>
 
-  <text x="644" y="96" class="sans" font-size="21" font-weight="700" fill="#1f2328" letter-spacing="-0.4">Zero LFS</text>
-  <text x="644" y="113" class="mono" font-size="10" fill="#57606a" letter-spacing="0.4">GZIP + CHUNKED SQLITE</text>
+  <text x="644" y="96" class="sans" font-size="21" font-weight="700" fill="#1f2328" letter-spacing="-0.4">4 Agents</text>
+  <text x="644" y="113" class="mono" font-size="10" fill="#57606a" letter-spacing="0.4">AGY · CLAUDE · CODEX · CURSOR</text>
 
   <text x="644" y="146" class="mono" font-size="19" font-weight="700" fill="#1f2328" letter-spacing="-0.4">/chat-sync</text>
-  <text x="644" y="163" class="mono" font-size="10" fill="#6e7781" letter-spacing="0.4">NATIVE AGY PLUGIN</text>
+  <text x="644" y="163" class="mono" font-size="10" fill="#6e7781" letter-spacing="0.4">UNIFIED SKILL + HANDOFF</text>
 </svg>

@@ -2,14 +2,15 @@ import { Database } from 'bun:sqlite'
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { collectAllExternalAgentSessions } from './agents'
 import { getAntigravityDir, getArgValue, loadConfig, REPO_ROOT } from './config'
 import { getActualConvDbStepCount, isAntigravityRunning, isLanguageServerRunning, isPidAlive } from './protobuf'
 
 const IDLE_SYNC_MS = 3 * 60 * 1000 // 3 minutes of quiet after new steps
 const MAX_UNSYNCED_MS = 15 * 60 * 1000 // Max 15 minutes during non-stop work
 const RETRY_BACKOFF_MS = 5 * 60 * 1000 // 5 minutes backoff if offline / network error
-const ACTIVE_POLL_MS = 15 * 1000 // Poll every 15s while Antigravity is open
-const DORMANT_POLL_MS = 20 * 1000 // Poll every 20s while Antigravity is closed
+const ACTIVE_POLL_MS = 15 * 1000 // Poll every 15s while active
+const DORMANT_POLL_MS = 20 * 1000 // Poll every 20s while closed
 const CLOSE_GRACE_MS = 12 * 1000 // Ignore transient Reload Window / Server Restart dips
 const MAX_LOG_BYTES = 256 * 1024 // Cap .daemon.log at 256 KB
 
@@ -28,7 +29,6 @@ function logEvent(msg: string) {
   } catch {}
 }
 
-// Single-instance guard
 if (existsSync(LOCK_PATH)) {
   try {
     const prev = JSON.parse(readFileSync(LOCK_PATH, 'utf8'))
@@ -78,161 +78,179 @@ const excludedSet = new Set(config.excludedConversationIds)
 const extraSet = new Set(config.extraConversationIds)
 
 function getArchivedProjectTotalSteps(): number {
+  let total = 0
   const summariesPath = join(REPO_ROOT, 'antigravity-backup', 'summaries.json')
-  if (!existsSync(summariesPath)) return 0
-  try {
-    const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
-    let total = 0
-    for (const s of summaries || []) {
-      if (excludedSet.has(s.conversation_id)) continue
-      total += s.step_count ?? 0
-    }
-    return total
-  } catch {
-    return 0
+  if (existsSync(summariesPath)) {
+    try {
+      const { summaries } = JSON.parse(readFileSync(summariesPath, 'utf8'))
+      for (const s of summaries || []) {
+        if (excludedSet.has(s.conversation_id)) continue
+        total += s.step_count ?? 0
+      }
+    } catch {}
   }
+
+  const extManifestPath = join(REPO_ROOT, 'agent-backups', 'manifest.json')
+  if (existsSync(extManifestPath)) {
+    try {
+      const extManifest = JSON.parse(readFileSync(extManifestPath, 'utf8'))
+      for (const s of extManifest.sessions || []) {
+        if (excludedSet.has(s.id)) continue
+        total += s.stepCount ?? 0
+      }
+    } catch {}
+  }
+
+  return total
 }
 
 function getLocalProjectTotalSteps(): number {
+  let total = 0
   const summaryDbPath = join(agyDir, 'conversation_summaries.db')
-  if (!existsSync(summaryDbPath)) return 0
+  if (existsSync(summaryDbPath)) {
+    try {
+      const db = new Database(summaryDbPath, { readonly: true })
+      const topRows = db
+        .query("SELECT conversation_id, step_count, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = ''")
+        .all() as Array<{ conversation_id: string; step_count: number; workspace_uris: string }>
+
+      const matchedTopIds: string[] = []
+      for (const r of topRows) {
+        if (excludedSet.has(r.conversation_id)) continue
+        const ws = String(r.workspace_uris || '').toLowerCase()
+        if (extraSet.has(r.conversation_id) || ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))) {
+          matchedTopIds.push(r.conversation_id)
+          const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${r.conversation_id}.db`))
+          total += Math.max(r.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+        }
+      }
+
+      if (matchedTopIds.length > 0) {
+        const ph = matchedTopIds.map(() => '?').join(',')
+        const childRows = db
+          .query(`SELECT conversation_id, step_count FROM conversation_summaries WHERE parent_conversation_id IN (${ph})`)
+          .all(...matchedTopIds) as Array<{ conversation_id: string; step_count: number }>
+        for (const c of childRows) {
+          const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${c.conversation_id}.db`))
+          total += Math.max(c.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
+        }
+      }
+      db.close()
+    } catch {}
+  }
+
   try {
-    const db = new Database(summaryDbPath, { readonly: true })
-    const topRows = db
-      .query("SELECT conversation_id, step_count, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = ''")
-      .all() as Array<{ conversation_id: string; step_count: number; workspace_uris: string }>
-
-    const matchedTopIds: string[] = []
-    let total = 0
-    for (const r of topRows) {
-      if (excludedSet.has(r.conversation_id)) continue
-      const ws = String(r.workspace_uris || '').toLowerCase()
-      if (extraSet.has(r.conversation_id) || ws.includes(slugLower) || legacyLowers.some(leg => ws.includes(leg))) {
-        matchedTopIds.push(r.conversation_id)
-        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${r.conversation_id}.db`))
-        total += Math.max(r.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
-      }
-    }
-
-    if (matchedTopIds.length > 0) {
-      const ph = matchedTopIds.map(() => '?').join(',')
-      const childRows = db
-        .query(`SELECT conversation_id, step_count FROM conversation_summaries WHERE parent_conversation_id IN (${ph})`)
-        .all(...matchedTopIds) as Array<{ conversation_id: string; step_count: number }>
-      for (const c of childRows) {
-        if (excludedSet.has(c.conversation_id)) continue
-        const dbSteps = getActualConvDbStepCount(join(agyDir, 'conversations', `${c.conversation_id}.db`))
-        total += Math.max(c.step_count ?? 0, dbSteps > 0 ? dbSteps : 0)
-      }
-    }
-    db.close()
-    return total
-  } catch {
-    return 0
-  }
-}
-
-function runSyncAndVerify(reason: string): boolean {
-  logEvent(`⬆️ Auto-syncing "${config.projectDisplayName}" (${reason})...`)
-  const syncRes = spawnSync(process.execPath, ['run', join(import.meta.dir, 'sync.ts')], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  if (syncRes.status === 0) {
-    const verRes = spawnSync(process.execPath, ['run', join(import.meta.dir, 'verify.ts')], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      windowsHide: true,
+    const extSessions = collectAllExternalAgentSessions({
+      projectSlug: config.projectSlug,
+      legacyProjectSlugs: config.legacyProjectSlugs,
+      excludedIds: excludedSet,
     })
-    logEvent(`✅ Auto-sync succeeded (${reason}) [verify=${verRes.status === 0 ? 'ok' : 'warn'}]`)
-    return true
-  }
-  logEvent(`⚠️ Auto-sync failed (${reason}): ${String(syncRes.stderr || syncRes.stdout || '').trim().slice(0, 200)}`)
-  return false
+    for (const s of extSessions) {
+      total += s.stepCount
+    }
+  } catch {}
+
+  return total
 }
 
-function runBootRestoreIfClosed() {
-  if (isAntigravityRunning() || isLanguageServerRunning()) return
-  logEvent(`⬇️ Antigravity is closed on daemon startup — pulling & restoring latest "${config.projectDisplayName}" chats...`)
-  const restoreArgs = ['run', join(import.meta.dir, 'restore.ts')]
-  if (targetWorkspacePath) restoreArgs.push('--workspace', targetWorkspacePath)
-  const res = spawnSync(process.execPath, restoreArgs, {
+function runScript(scriptRelPath: string, extraArgs: string[] = []): boolean {
+  const res = spawnSync(process.execPath, ['run', join(REPO_ROOT, scriptRelPath), ...extraArgs], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     windowsHide: true,
   })
-  logEvent(`⬇️ Boot restore finished (exit=${res.status ?? -1})`)
+  if (res.status !== 0) {
+    const errSnippet = String(res.stderr || res.stdout || '')
+      .trim()
+      .split('\n')
+      .slice(-3)
+      .join(' | ')
+    logEvent(`⚠️ ${scriptRelPath} failed (code ${res.status}): ${errSnippet}`)
+    return false
+  }
+  return true
 }
 
-logEvent(
-  `🟢 Daemon started (PID ${process.pid}) for "${config.projectDisplayName}" — watching 3m idle / 15m checkpoint / exit sync.`,
-)
+function runSafeSync(reason: string): boolean {
+  logEvent(`🔄 Triggering auto-sync (${reason})...`)
+  const ok = runScript('src/sync.ts')
+  if (ok) {
+    logEvent(`✅ Auto-sync succeeded (${reason}).`)
+  }
+  return ok
+}
 
-runBootRestoreIfClosed()
+function runSafeStartupRestore() {
+  if (isAntigravityRunning() || isLanguageServerRunning()) return
+  const restoreArgs = targetWorkspacePath ? ['--workspace', targetWorkspacePath] : []
+  const ok = runScript('src/restore.ts', restoreArgs)
+  if (ok) {
+    logEvent(`📥 Startup restore check completed cleanly.`)
+  }
+}
 
+logEvent(`🟢 Daemon started (PID ${process.pid}) for "${config.projectDisplayName}" — watching Antigravity, Claude, Codex & Cursor (3m idle / 15m / exit).`)
+
+runSafeStartupRestore()
+
+let wasAgyOpen = isAntigravityRunning() || isLanguageServerRunning()
 let lastSyncedSteps = getArchivedProjectTotalSteps()
-let prevPolledSteps = getLocalProjectTotalSteps()
-let lastActivityAt = Date.now()
-let unsyncedSince: number | null = prevPolledSteps > lastSyncedSteps ? Date.now() : null
-let nextAllowedSyncAt = 0
-let wasRunning = isAntigravityRunning()
+let lastObservedSteps = Math.max(lastSyncedSteps, getLocalProjectTotalSteps())
+let lastStepChangeAt = lastObservedSteps > lastSyncedSteps ? Date.now() : 0
+let unsyncedSince = lastObservedSteps > lastSyncedSteps ? Date.now() : 0
+let nextRetryAllowedAt = 0
 
 while (true) {
-  await Bun.sleep(wasRunning ? ACTIVE_POLL_MS : DORMANT_POLL_MS)
+  const isOpen = isAntigravityRunning() || isLanguageServerRunning()
 
-  let nowRunning = isAntigravityRunning()
-  if (wasRunning && !nowRunning) {
+  if (!wasAgyOpen && isOpen) {
+    logEvent('🚀 Antigravity session detected — active watcher engaged.')
+    wasAgyOpen = true
+  } else if (wasAgyOpen && !isOpen) {
     await Bun.sleep(CLOSE_GRACE_MS)
-    nowRunning = isAntigravityRunning()
+    const reopened = isAntigravityRunning() || isLanguageServerRunning()
+    if (!reopened) {
+      wasAgyOpen = false
+      const finalLocalSteps = getLocalProjectTotalSteps()
+      if (finalLocalSteps > lastSyncedSteps) {
+        if (runSafeSync('Antigravity closed')) {
+          lastSyncedSteps = Math.max(finalLocalSteps, getArchivedProjectTotalSteps())
+          lastObservedSteps = lastSyncedSteps
+          unsyncedSince = 0
+        } else {
+          nextRetryAllowedAt = Date.now() + RETRY_BACKOFF_MS
+        }
+      } else {
+        logEvent('👋 Antigravity closed — archive already up to date.')
+      }
+    }
   }
 
-  const curSteps = getLocalProjectTotalSteps()
+  // Always check local steps across all agents (Claude, Codex, Cursor work even when Antigravity is closed!)
   const now = Date.now()
+  const currentSteps = getLocalProjectTotalSteps()
 
-  if (curSteps > prevPolledSteps) {
-    lastActivityAt = now
-    if (unsyncedSince === null && curSteps > lastSyncedSteps) {
-      unsyncedSince = now
-    }
+  if (currentSteps > lastObservedSteps) {
+    lastObservedSteps = currentSteps
+    lastStepChangeAt = now
+    if (unsyncedSince === 0) unsyncedSince = now
   }
-  prevPolledSteps = curSteps
 
-  if (wasRunning && !nowRunning) {
-    logEvent('🔵 Antigravity closed — checking for unsynced steps...')
-    if (curSteps > lastSyncedSteps && now >= nextAllowedSyncAt) {
-      const ok = runSyncAndVerify('Antigravity closed')
-      if (ok) {
-        lastSyncedSteps = Math.max(getArchivedProjectTotalSteps(), getLocalProjectTotalSteps())
-        prevPolledSteps = lastSyncedSteps
-        unsyncedSince = null
+  if (currentSteps > lastSyncedSteps && now >= nextRetryAllowedAt) {
+    const idleElapsed = lastStepChangeAt > 0 ? now - lastStepChangeAt : IDLE_SYNC_MS
+    const totalUnsyncedElapsed = unsyncedSince > 0 ? now - unsyncedSince : MAX_UNSYNCED_MS
+
+    if (idleElapsed >= IDLE_SYNC_MS || totalUnsyncedElapsed >= MAX_UNSYNCED_MS) {
+      const triggerReason = idleElapsed >= IDLE_SYNC_MS ? '3m idle' : '15m checkpoint'
+      if (runSafeSync(triggerReason)) {
+        lastSyncedSteps = Math.max(currentSteps, getArchivedProjectTotalSteps())
+        lastObservedSteps = lastSyncedSteps
+        unsyncedSince = 0
       } else {
-        nextAllowedSyncAt = Date.now() + RETRY_BACKOFF_MS
-      }
-    }
-    wasRunning = false
-    continue
-  }
-
-  if (!wasRunning && nowRunning) {
-    logEvent('🟢 Antigravity opened — active auto-sync monitoring engaged.')
-  }
-  wasRunning = nowRunning
-
-  if (curSteps > lastSyncedSteps && now >= nextAllowedSyncAt) {
-    if (unsyncedSince === null) unsyncedSince = now
-    const idleReady = now - lastActivityAt >= IDLE_SYNC_MS
-    const maxReady = now - unsyncedSince >= MAX_UNSYNCED_MS
-
-    if (idleReady || maxReady) {
-      const ok = runSyncAndVerify(idleReady ? '3m idle after new steps' : '15m periodic checkpoint')
-      if (ok) {
-        lastSyncedSteps = Math.max(getArchivedProjectTotalSteps(), getLocalProjectTotalSteps())
-        prevPolledSteps = lastSyncedSteps
-        unsyncedSince = null
-      } else {
-        nextAllowedSyncAt = Date.now() + RETRY_BACKOFF_MS
+        nextRetryAllowedAt = Date.now() + RETRY_BACKOFF_MS
       }
     }
   }
+
+  await Bun.sleep(isOpen ? ACTIVE_POLL_MS : DORMANT_POLL_MS)
 }

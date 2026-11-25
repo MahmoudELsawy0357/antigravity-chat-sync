@@ -1,8 +1,8 @@
 {
   "name": "antigravity-chat-sync",
   "displayName": "Antigravity Chat Sync",
-  "version": "1.1.0",
-  "description": "Synchronize, back up, search, and restore project-scoped Antigravity conversations across multiple machines via a private GitHub repository.",
+  "version": "2.0.0",
+  "description": "Multi-agent conversation archiver, sync toolkit, and cross-agent session handoff bridge across Google Antigravity, Claude Code, Codex, and Cursor.",
   "logo": "assets/logo.svg",
   "author": {
     "name": "Mahmoud El-Sawy",
@@ -11,8 +11,8 @@
   "homepage": "https://github.com/MahmoudELsawy0357/antigravity-chat-sync",
   "repository": "https://github.com/MahmoudELsawy0357/antigravity-chat-sync",
   "suggestedPrompts": [
-    "Sync and push this project's conversations to GitHub",
-    "Check conversation sync status and project_id health",
-    "Search archived conversations in this project"
+    "Sync this project's conversations across Antigravity, Claude, Codex, and Cursor",
+    "Continue my latest session from another AI coding agent",
+    "Check multi-agent sync status and project_id health"
   ]
 }
