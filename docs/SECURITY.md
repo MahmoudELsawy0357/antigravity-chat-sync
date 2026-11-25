@@ -1,4 +1,4 @@
-# 🔒 Security & Binary Protobuf Secret Redaction
+# Security & Binary Protobuf Secret Redaction
 
 Archiving real engineering conversations to GitHub introduces two critical security challenges:
 1. **Credential Exposure:** Prompts, `.env` reads, or CLI commands recorded in chat steps may contain live API tokens (Jira `ATATT3x...`, Postman `PMAK-...`, GitHub `ghp_...` / `github_pat_...`, Google `AIza...`, Slack `xox...`, Stripe `sk_live_...`/`rk_live_...`, OpenAI/Anthropic `sk-...`, AWS `AKIA...`, Private Key PEM blocks, Database URLs with embedded passwords, and JWTs).
