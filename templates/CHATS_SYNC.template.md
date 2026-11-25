@@ -1,4 +1,4 @@
-# 🤖 Daily Antigravity Chat Sync Playbook (`CHATS_SYNC.md`)
+# Daily Antigravity Chat Sync Playbook (`CHATS_SYNC.md`)
 
 > **Quick Usage:**
 > Tag `@CHATS_SYNC.md` in Google Antigravity chat and tell the agent one of:
@@ -9,7 +9,7 @@
 
 ---
 
-## 🛠️ Execution Instructions (For Antigravity AI)
+## Execution Instructions (For Antigravity AI)
 
 Synchronize Google Antigravity conversations strictly for **`{{PROJECT_SLUG}}`** via the private GitHub repository `https://github.com/{{ARCHIVE_REPO}}.git`.
 
