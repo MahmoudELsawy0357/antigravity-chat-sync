@@ -1,9 +1,27 @@
 import { Database } from 'bun:sqlite'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { redactText } from './redact'
+
+/**
+ * Generates an RFC 9562 monotonic time-ordered UUIDv7 (`019...`) required by Codex's Rust thread engine.
+ */
+export function generateUuidV7(nowMs = Date.now()): string {
+  const bytes = randomBytes(16)
+  const ts = BigInt(nowMs)
+  bytes[0] = Number((ts >> 40n) & 0xffn)
+  bytes[1] = Number((ts >> 32n) & 0xffn)
+  bytes[2] = Number((ts >> 24n) & 0xffn)
+  bytes[3] = Number((ts >> 16n) & 0xffn)
+  bytes[4] = Number((ts >> 8n) & 0xffn)
+  bytes[5] = Number(ts & 0xffn)
+  bytes[6] = (bytes[6] & 0x0f) | 0x70 // version 7
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // RFC 4122/9562 variant
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
 
 export type AgentKind = 'antigravity' | 'claude' | 'codex' | 'cursor'
 export type ExternalAgentKind = Exclude<AgentKind, 'antigravity'>
@@ -683,8 +701,11 @@ export function createSeededCodexSession(opts: {
   ackText: string
   codexDir?: string
 }): { sessionId: string; filePath: string } {
-  const sessionId = randomUUID()
   const now = new Date()
+  const nowMs = now.getTime()
+  const nowSec = Math.floor(nowMs / 1000)
+  const sessionId = generateUuidV7(nowMs)
+  const turnId = generateUuidV7(nowMs + 1)
   const iso = now.toISOString()
   const yyyy = String(now.getUTCFullYear())
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
@@ -698,24 +719,52 @@ export function createSeededCodexSession(opts: {
   mkdirSync(dayDir, { recursive: true })
 
   const resolvedWs = resolve(opts.workspacePath)
+  const rolloutCwd =
+    process.platform === 'win32'
+      ? resolvedWs.replace(/^[A-Z]:/, m => m.toLowerCase())
+      : resolvedWs
+  const sqliteCwd =
+    process.platform === 'win32'
+      ? `\\\\?\\${resolvedWs.replace(/^[a-z]:/, m => m.toUpperCase())}`
+      : resolvedWs
+
   const filePath = join(dayDir, `rollout-${yyyy}-${mm}-${dd}T${hh}-${mi}-${ss}-${sessionId}.jsonl`)
 
-  const lines = [
+  const line0 = JSON.stringify({
+    timestamp: iso,
+    ordinal: 0,
+    type: 'session_meta',
+    payload: {
+      session_id: sessionId,
+      id: sessionId,
+      timestamp: iso,
+      cwd: rolloutCwd,
+      originator: 'codex_vscode',
+      cli_version: '0.104.0-alpha.1',
+      source: 'vscode',
+      model_provider: 'openai',
+      base_instructions: {
+        text: 'You are Codex, a pragmatic software engineering agent collaborating with the user in their workspace.',
+      },
+      history_mode: 'paginated',
+    },
+  })
+
+  const turnLines = [
     JSON.stringify({
       timestamp: iso,
-      ordinal: 0,
-      type: 'session_meta',
+      ordinal: 1,
+      type: 'event_msg',
       payload: {
-        session_id: sessionId,
-        id: sessionId,
-        timestamp: iso,
-        cwd: resolvedWs,
-        originator: 'antigravity-chat-sync',
+        type: 'task_started',
+        turn_id: turnId,
+        model_context_window: 258400,
+        collaboration_mode_kind: 'default',
       },
     }),
     JSON.stringify({
       timestamp: iso,
-      ordinal: 1,
+      ordinal: 2,
       type: 'response_item',
       payload: {
         type: 'message',
@@ -725,7 +774,38 @@ export function createSeededCodexSession(opts: {
     }),
     JSON.stringify({
       timestamp: iso,
-      ordinal: 2,
+      ordinal: 3,
+      type: 'event_msg',
+      payload: {
+        type: 'item_completed',
+        thread_id: sessionId,
+        turn_id: turnId,
+        item: {
+          type: 'UserMessage',
+          id: 'item-1',
+          content: [{ type: 'text', text: opts.handoffBrief }],
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: iso,
+      ordinal: 4,
+      type: 'event_msg',
+      payload: {
+        type: 'item_completed',
+        thread_id: sessionId,
+        turn_id: turnId,
+        item: {
+          type: 'AgentMessage',
+          id: 'item-2',
+          content: [{ type: 'Text', text: opts.ackText }],
+        },
+        completed_at_ms: nowMs,
+      },
+    }),
+    JSON.stringify({
+      timestamp: iso,
+      ordinal: 5,
       type: 'response_item',
       payload: {
         type: 'message',
@@ -733,14 +813,136 @@ export function createSeededCodexSession(opts: {
         content: [{ type: 'output_text', text: opts.ackText }],
       },
     }),
+    JSON.stringify({
+      timestamp: iso,
+      ordinal: 6,
+      type: 'event_msg',
+      payload: {
+        type: 'task_complete',
+        turn_id: turnId,
+        last_agent_message: opts.ackText,
+      },
+    }),
   ]
 
-  writeFileSync(filePath, lines.join('\n') + '\n', 'utf8')
+  const turnByteOffset = Buffer.byteLength(line0 + '\n', 'utf8')
+  const fullContent = [line0, ...turnLines].join('\n') + '\n'
+  const totalBytes = Buffer.byteLength(fullContent, 'utf8')
+  writeFileSync(filePath, fullContent, 'utf8')
 
+  // 1. Upsert into session_index.jsonl (for Codex CLI)
   const indexFile = join(root, 'session_index.jsonl')
   const existing = existsSync(indexFile) ? readFileSync(indexFile, 'utf8').trimEnd() : ''
   const entry = JSON.stringify({ id: sessionId, thread_name: opts.title, updated_at: iso })
   writeFileSync(indexFile, (existing ? `${existing}\n${entry}` : entry) + '\n', 'utf8')
+
+  // 2. Upsert into Codex VS Code SQLite state_*.sqlite (threads sidebar list)
+  try {
+    const stateFiles = readdirSync(root).filter(f => /^state_\d+\.sqlite$/.test(f)).sort()
+    for (const sf of stateFiles) {
+      const sdb = new Database(join(root, sf))
+      sdb.exec('PRAGMA busy_timeout = 5000;')
+      const cols = (sdb.query('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(c => c.name)
+      if (cols.includes('id') && cols.includes('rollout_path')) {
+        const colValues: Record<string, any> = {
+          id: sessionId,
+          rollout_path: filePath,
+          created_at: nowSec,
+          updated_at: nowSec,
+          source: 'vscode',
+          model_provider: 'openai',
+          cwd: sqliteCwd,
+          title: opts.title,
+          sandbox_policy: '{"type":"disabled"}',
+          approval_mode: 'never',
+          tokens_used: 0,
+          has_user_event: 1,
+          archived: 0,
+          cli_version: '0.104.0-alpha.1',
+          first_user_message: opts.handoffBrief,
+          memory_mode: 'enabled',
+          created_at_ms: nowMs,
+          updated_at_ms: nowMs,
+          preview: opts.title,
+          recency_at: nowSec,
+          recency_at_ms: nowMs,
+          history_mode: 'paginated',
+          name: opts.title,
+          is_pinned: 0,
+          originator: 'codex_vscode',
+        }
+        const activeCols = Object.keys(colValues).filter(k => cols.includes(k))
+        const placeholders = activeCols.map(() => '?').join(', ')
+        sdb
+          .query(`INSERT OR REPLACE INTO threads (${activeCols.join(', ')}) VALUES (${placeholders})`)
+          .run(...activeCols.map(k => colValues[k]))
+      }
+      sdb.close()
+    }
+  } catch {}
+
+  // 3. Upsert into Codex VS Code thread_history_*.sqlite (paginated turn & message items)
+  try {
+    const histFiles = readdirSync(root).filter(f => /^thread_history_\d+\.sqlite$/.test(f)).sort()
+    for (const hf of histFiles) {
+      const hdb = new Database(join(root, hf))
+      hdb.exec('PRAGMA busy_timeout = 5000;')
+      const tables = new Set(
+        (hdb.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(t => t.name),
+      )
+      if (tables.has('thread_turns') && tables.has('thread_items')) {
+        hdb
+          .query(
+            `INSERT OR REPLACE INTO thread_turns (
+              thread_id, turn_id, rollout_ordinal, status, first_user_item_id, final_agent_item_id,
+              rollout_byte_offset, rollout_end_ordinal, rollout_end_byte_offset
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(sessionId, turnId, 1, 'completed', 'item-1', 'item-2', turnByteOffset, 6, totalBytes)
+
+        const userItemJson = JSON.stringify({
+          type: 'userMessage',
+          id: 'item-1',
+          clientId: null,
+          content: [{ type: 'text', text: opts.handoffBrief, text_elements: [] }],
+        })
+        const agentItemJson = JSON.stringify({
+          type: 'agentMessage',
+          id: 'item-2',
+          text: opts.ackText,
+          phase: null,
+          memoryCitation: null,
+          delivery: null,
+          questions: null,
+        })
+
+        hdb
+          .query(
+            `INSERT OR REPLACE INTO thread_items (
+              thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type, updated_at_ordinal, completed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(sessionId, turnId, 'item-1', 3, nowMs, userItemJson, 'userMessage', 3, nowMs)
+
+        hdb
+          .query(
+            `INSERT OR REPLACE INTO thread_items (
+              thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type, updated_at_ordinal, completed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(sessionId, turnId, 'item-2', 4, nowMs + 1, agentItemJson, 'agentMessage', 4, nowMs + 1)
+
+        if (tables.has('thread_history_projection_state')) {
+          hdb
+            .query(
+              'INSERT OR REPLACE INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, ?, ?)',
+            )
+            .run(sessionId, totalBytes, 7)
+        }
+      }
+      hdb.close()
+    }
+  } catch {}
 
   return { sessionId, filePath }
 }

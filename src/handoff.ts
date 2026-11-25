@@ -171,7 +171,7 @@ export async function executeHandoff(opts: {
       target: 'Codex',
       sessionId: seeded.sessionId,
       location: seeded.filePath,
-      resumeHint: `Open Codex in "${opts.workspacePath}" (thread "${handoffTitle}") or run: codex resume ${seeded.sessionId}`,
+      resumeHint: `In VS Code Codex sidebar: click "${handoffTitle}" under Chats (run "Developer: Reload Window" if VS Code was already open), or CLI: codex resume ${seeded.sessionId}`,
     }
   }
 
