@@ -1,8 +1,10 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/hero-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/hero-light.svg" />
+  <img alt="antigravity-chat-sync — By Mahmoud Elsawy" src="./docs/assets/hero-dark.svg" width="100%" />
+</picture>
+
 <div align="center">
-
-# antigravity-chat-sync
-
-**Project-scoped Google Antigravity conversation archiver, multi-device sync toolkit, and native `/chat-sync` plugin.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/MahmoudELsawy0357/antigravity-chat-sync/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/MahmoudELsawy0357/antigravity-chat-sync/actions/workflows/ci.yml)
 [![Runtime](https://img.shields.io/badge/Bun-%3E%3D1.1-000000?style=flat-square&logo=bun&logoColor=white)](https://bun.sh/)
@@ -11,7 +13,14 @@
 [![Security](https://img.shields.io/badge/Secret_Redaction-Byte--Preserving-0F766E?style=flat-square)](./docs/SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-2563EB?style=flat-square)](./LICENSE.md)
 
-[Core Capabilities](#core-capabilities) · [How It Works](#how-multi-device-sync-works) · [Quick Start](#quick-start) · [Daily Workflow](#daily-workflow) · [CLI Reference](#configuration--cli-reference) · [Security](./docs/SECURITY.md)
+<samp>
+  <a href="#core-capabilities">capabilities</a> &nbsp;·&nbsp;
+  <a href="#how-multi-device-sync-works">architecture</a> &nbsp;·&nbsp;
+  <a href="#quick-start">quick start</a> &nbsp;·&nbsp;
+  <a href="#daily-workflow">workflow</a> &nbsp;·&nbsp;
+  <a href="#configuration--cli-reference">cli reference</a> &nbsp;·&nbsp;
+  <a href="./docs/SECURITY.md">security</a>
+</samp>
 
 </div>
 
