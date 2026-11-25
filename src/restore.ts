@@ -391,3 +391,22 @@ if (!isIndexOnly && targetWorkspacePath && existsSync(extManifestPath)) {
     console.log(`🎉 Restored ${extRestored} external agent session(s) for ${config.projectSlug}.`)
   }
 }
+
+// ── Part C: Auto-Bridge All Conversations into Every Installed AI Sidebar ─────
+if (!isIndexOnly && targetWorkspacePath && !process.argv.includes('--no-bridge')) {
+  try {
+    const { executeLocalBridge } = await import('./local-bridge')
+    const bridged = executeLocalBridge({
+      workspacePath: targetWorkspacePath,
+      projectSlug: config.projectSlug,
+      legacyProjectSlugs: config.legacyProjectSlugs,
+      excludedIds: new Set(config.excludedConversationIds),
+      targetAgent: 'all',
+    })
+    if (bridged.bridgedTargets.length > 0) {
+      console.log(
+        `⚡ Auto-bridged ${bridged.sourceSessionsCount} conversation(s) into: ${bridged.bridgedTargets.map(t => t.targetAgent).join(' · ')}`,
+      )
+    }
+  } catch {}
+}

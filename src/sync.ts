@@ -546,6 +546,24 @@ writeFileSync(
   'utf8',
 )
 
+if (syncWorkspacePath && !process.argv.includes('--no-bridge')) {
+  try {
+    const { executeLocalBridge } = await import('./local-bridge')
+    const bridged = executeLocalBridge({
+      workspacePath: syncWorkspacePath,
+      projectSlug: config.projectSlug,
+      legacyProjectSlugs: config.legacyProjectSlugs,
+      excludedIds: excludedSet,
+      targetAgent: 'all',
+    })
+    if (bridged.bridgedTargets.length > 0) {
+      console.log(
+        `⚡ Auto-bridged ${bridged.sourceSessionsCount} conversation(s) locally into: ${bridged.bridgedTargets.map(t => t.targetAgent).join(' · ')}`,
+      )
+    }
+  } catch {}
+}
+
 if (existsSync(join(REPO_ROOT, '.git')) && !process.argv.includes('--no-push')) {
   const status = spawnSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' })
   if (!status.stdout || status.stdout.trim().length === 0) {
