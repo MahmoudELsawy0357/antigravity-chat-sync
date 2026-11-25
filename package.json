@@ -1,18 +1,29 @@
 {
   "name": "antigravity-chat-sync",
-  "version": "1.0.0",
-  "private": true,
+  "version": "1.1.0",
   "type": "module",
-  "description": "Project-scoped Google Antigravity conversation archiver and multi-device sync toolkit backed by a private GitHub repository.",
+  "license": "MIT",
+  "description": "Project-scoped Google Antigravity conversation archiver, multi-device sync toolkit, and native Antigravity plugin.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MahmoudELsawy0357/antigravity-chat-sync.git"
+  },
+  "bin": {
+    "antigravity-chat-sync": "./src/cli.ts"
+  },
   "scripts": {
+    "setup": "bun run src/bootstrap.ts",
     "init": "bun run src/init.ts",
     "sync": "bun run src/sync.ts",
     "restore": "bun run src/restore.ts",
+    "search": "bun run src/search.ts",
     "launch": "bun run src/launch.ts",
     "daemon": "bun run src/daemon.ts",
     "autostart": "bun run src/autostart.ts",
     "autostart:stop": "bun run src/autostart.ts --remove",
     "shortcut": "bun run src/shortcut.ts",
+    "plugin:install": "bun run src/plugin-install.ts",
+    "plugin:uninstall": "bun run src/plugin-install.ts --uninstall",
     "status": "bun run src/status.ts",
     "doctor": "bun run src/status.ts",
     "verify": "bun run src/verify.ts",

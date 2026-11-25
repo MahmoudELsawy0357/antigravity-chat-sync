@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { getArgValue, REPO_ROOT, type SyncConfig } from './config'
+import { registerProject } from './registry'
 
 const projectSlug = getArgValue('--project')
 const archiveRepo = getArgValue('--repo')
@@ -25,6 +26,14 @@ const config: SyncConfig = {
 
 writeFileSync(join(REPO_ROOT, 'sync.config.json'), JSON.stringify(config, null, 2) + '\n', 'utf8')
 console.log(`✅ Created sync.config.json for project "${projectSlug}" -> https://github.com/${archiveRepo}`)
+
+registerProject({
+  projectSlug,
+  projectDisplayName: config.projectDisplayName,
+  archiveDir: REPO_ROOT,
+  archiveRepo,
+  workspacePath: workspacePath && existsSync(resolve(workspacePath)) ? resolve(workspacePath) : undefined,
+})
 
 function renderTemplate(templateName: string): string {
   const raw = readFileSync(join(REPO_ROOT, 'templates', templateName), 'utf8')
