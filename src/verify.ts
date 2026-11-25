@@ -64,10 +64,8 @@ export function auditArchiveDirs(dirs: string[], rootDir = REPO_ROOT): AuditRepo
           continue
         }
 
-        let rawBuf: Uint8Array = readFileSync(fullPath)
-        if (fullPath.endsWith('.gz')) {
-          rawBuf = Bun.gunzipSync(rawBuf)
-        }
+        const fileBuf = readFileSync(fullPath)
+        const rawBuf: Uint8Array = fullPath.endsWith('.gz') ? Bun.gunzipSync(fileBuf) : fileBuf
         scanBuffer(rawBuf, relative(rootDir, fullPath), leaks)
       }
     }

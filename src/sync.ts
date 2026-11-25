@@ -99,7 +99,7 @@ function writeChunkedGzip(rawBuf: Uint8Array, destDir: string, baseName: string)
     }
   }
 
-  const gz = Bun.gzipSync(rawBuf)
+  const gz = Bun.gzipSync(rawBuf as Uint8Array<ArrayBuffer>)
   const files: string[] = []
   if (gz.byteLength <= maxChunkBytes) {
     writeFileSync(join(destDir, singleName), gz)
